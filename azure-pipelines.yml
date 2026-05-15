@@ -1,0 +1,395 @@
+parameters:
+  - name: useEnvironmentApprovals
+    type: boolean
+    default: false
+  - name: sandboxEnvironmentName
+    type: string
+    default: 'enterprise-ai-chatbot-sandbox'
+  - name: devEnvironmentName
+    type: string
+    default: 'enterprise-ai-chatbot-dev'
+
+name: $(Build.Repository.Name)
+
+resources:
+  repositories:
+    - repository: templateRepo
+      type: git
+      name: IaC/template
+      ref: refs/heads/main
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+      - dev
+      - sandbox
+      - sbx
+
+pr: none
+
+pool:
+  name: 'Azure Pipelines'
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - name: terraformVersion
+    value: '1.10.5'
+  - name: selfRepoRoot
+    value: '$(Pipeline.Workspace)/s/enterprise-ai-chatbot'
+
+stages:
+  - stage: Validate
+    displayName: Common Validation
+    jobs:
+      - job: terraform_validate
+        displayName: Terraform Validate
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: true
+            path: s/enterprise-ai-chatbot
+          - checkout: templateRepo
+            clean: true
+            persistCredentials: true
+            path: s/template
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+              arguments: $(terraformVersion)
+              workingDirectory: $(selfRepoRoot)
+
+          - task: Bash@3
+            displayName: Terraform fmt and validate
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-validate.sh
+              workingDirectory: $(selfRepoRoot)
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  - stage: PlanSandbox
+    displayName: Plan Sandbox
+    dependsOn: Validate
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/sandbox'), eq(variables['Build.SourceBranch'], 'refs/heads/sbx')))
+    variables:
+      azureSubscription: 'sc-platform-sbx'
+      terraformVarFile: 'environments/sandbox/terraform.tfvars'
+      terraformBackendFile: 'environments/sandbox/backend.hcl'
+      planArtifactName: 'terraform-plan-sandbox'
+      planTextArtifactName: 'terraform-plan-sandbox-text'
+      planFilePath: '$(Build.ArtifactStagingDirectory)/sandbox/terraform.tfplan'
+      planTextPath: '$(Build.ArtifactStagingDirectory)/sandbox/terraform-plan.txt'
+    jobs:
+      - job: terraform_plan_sandbox
+        displayName: Terraform Plan Sandbox
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: true
+            path: s/enterprise-ai-chatbot
+          - checkout: templateRepo
+            clean: true
+            persistCredentials: true
+            path: s/template
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+              arguments: $(terraformVersion)
+              workingDirectory: $(selfRepoRoot)
+
+          - task: AzureCLI@2
+            displayName: Terraform plan sandbox
+            inputs:
+              azureSubscription: 'sc-platform-sbx'
+              scriptType: bash
+              scriptLocation: scriptPath
+              scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-plan.sh
+              arguments: >-
+                "$(terraformBackendFile)"
+                "$(terraformVarFile)"
+                "$(planFilePath)"
+                "$(planTextPath)"
+              workingDirectory: $(selfRepoRoot)
+              addSpnToEnvironment: true
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish sandbox plan artifact
+            inputs:
+              targetPath: $(planFilePath)
+              artifact: $(planArtifactName)
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish sandbox plan text
+            inputs:
+              targetPath: $(planTextPath)
+              artifact: $(planTextArtifactName)
+
+  - stage: PlanDev
+    displayName: Plan Dev
+    dependsOn: Validate
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/dev')))
+    variables:
+      azureSubscription: 'sc-platform-dev'
+      terraformVarFile: 'environments/dev/terraform.tfvars'
+      terraformBackendFile: 'environments/dev/backend.hcl'
+      planArtifactName: 'terraform-plan-dev'
+      planTextArtifactName: 'terraform-plan-dev-text'
+      planFilePath: '$(Build.ArtifactStagingDirectory)/dev/terraform.tfplan'
+      planTextPath: '$(Build.ArtifactStagingDirectory)/dev/terraform-plan.txt'
+    jobs:
+      - job: terraform_plan_dev
+        displayName: Terraform Plan Dev
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: true
+            path: s/enterprise-ai-chatbot
+          - checkout: templateRepo
+            clean: true
+            persistCredentials: true
+            path: s/template
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+              arguments: $(terraformVersion)
+              workingDirectory: $(selfRepoRoot)
+
+          - task: AzureCLI@2
+            displayName: Terraform plan dev
+            inputs:
+              azureSubscription: 'sc-platform-dev'
+              scriptType: bash
+              scriptLocation: scriptPath
+              scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-plan.sh
+              arguments: >-
+                "$(terraformBackendFile)"
+                "$(terraformVarFile)"
+                "$(planFilePath)"
+                "$(planTextPath)"
+              workingDirectory: $(selfRepoRoot)
+              addSpnToEnvironment: true
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish dev plan artifact
+            inputs:
+              targetPath: $(planFilePath)
+              artifact: $(planArtifactName)
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish dev plan text
+            inputs:
+              targetPath: $(planTextPath)
+              artifact: $(planTextArtifactName)
+
+  - stage: ApplySandbox
+    displayName: Apply Sandbox
+    dependsOn: PlanSandbox
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/sandbox'), eq(variables['Build.SourceBranch'], 'refs/heads/sbx')))
+    variables:
+      azureSubscription: 'sc-platform-sbx'
+      terraformBackendFile: 'environments/sandbox/backend.hcl'
+      downloadedPlanPath: '$(Pipeline.Workspace)/terraform-plan-sandbox/terraform.tfplan'
+    jobs:
+      - ${{ if eq(parameters.useEnvironmentApprovals, true) }}:
+        - deployment: terraform_apply_sandbox
+          displayName: Terraform Apply Sandbox
+          environment: ${{ parameters.sandboxEnvironmentName }}
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - checkout: self
+                    clean: true
+                    persistCredentials: true
+                    path: s/enterprise-ai-chatbot
+                  - checkout: templateRepo
+                    clean: true
+                    persistCredentials: true
+                    path: s/template
+
+                  - task: Bash@3
+                    displayName: Install Terraform
+                    inputs:
+                      targetType: filePath
+                      filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+                      arguments: $(terraformVersion)
+                      workingDirectory: $(selfRepoRoot)
+
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download sandbox plan artifact
+                    inputs:
+                      buildType: current
+                      artifactName: terraform-plan-sandbox
+                      targetPath: $(Pipeline.Workspace)/terraform-plan-sandbox
+
+                  - task: AzureCLI@2
+                    displayName: Terraform apply sandbox
+                    inputs:
+                      azureSubscription: 'sc-platform-sbx'
+                      scriptType: bash
+                      scriptLocation: scriptPath
+                      scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-apply.sh
+                      arguments: >-
+                        "$(terraformBackendFile)"
+                        "$(downloadedPlanPath)"
+                      workingDirectory: $(selfRepoRoot)
+                      addSpnToEnvironment: true
+                    env:
+                      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      - ${{ if ne(parameters.useEnvironmentApprovals, true) }}:
+        - job: terraform_apply_sandbox
+          displayName: Terraform Apply Sandbox
+          steps:
+            - checkout: self
+              clean: true
+              persistCredentials: true
+              path: s/enterprise-ai-chatbot
+            - checkout: templateRepo
+              clean: true
+              persistCredentials: true
+              path: s/template
+
+            - task: Bash@3
+              displayName: Install Terraform
+              inputs:
+                targetType: filePath
+                filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+                arguments: $(terraformVersion)
+                workingDirectory: $(selfRepoRoot)
+
+            - task: DownloadPipelineArtifact@2
+              displayName: Download sandbox plan artifact
+              inputs:
+                buildType: current
+                artifactName: terraform-plan-sandbox
+                targetPath: $(Pipeline.Workspace)/terraform-plan-sandbox
+
+            - task: AzureCLI@2
+              displayName: Terraform apply sandbox
+              inputs:
+                azureSubscription: 'sc-platform-sbx'
+                scriptType: bash
+                scriptLocation: scriptPath
+                scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-apply.sh
+                arguments: >-
+                  "$(terraformBackendFile)"
+                  "$(downloadedPlanPath)"
+                workingDirectory: $(selfRepoRoot)
+                addSpnToEnvironment: true
+              env:
+                SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  - stage: ApplyDev
+    displayName: Apply Dev
+    dependsOn:
+      - PlanDev
+      #- ApplySandbox
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/dev')))
+    variables:
+      azureSubscription: 'sc-platform-dev'
+      terraformBackendFile: 'environments/dev/backend.hcl'
+      downloadedPlanPath: '$(Pipeline.Workspace)/terraform-plan-dev/terraform.tfplan'
+    jobs:
+      - ${{ if eq(parameters.useEnvironmentApprovals, true) }}:
+        - deployment: terraform_apply_dev
+          displayName: Terraform Apply Dev
+          environment: ${{ parameters.devEnvironmentName }}
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - checkout: self
+                    clean: true
+                    persistCredentials: true
+                    path: s/enterprise-ai-chatbot
+                  - checkout: templateRepo
+                    clean: true
+                    persistCredentials: true
+                    path: s/template
+
+                  - task: Bash@3
+                    displayName: Install Terraform
+                    inputs:
+                      targetType: filePath
+                      filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+                      arguments: $(terraformVersion)
+                      workingDirectory: $(selfRepoRoot)
+
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download dev plan artifact
+                    inputs:
+                      buildType: current
+                      artifactName: terraform-plan-dev
+                      targetPath: $(Pipeline.Workspace)/terraform-plan-dev
+
+                  - task: AzureCLI@2
+                    displayName: Terraform apply dev
+                    inputs:
+                      azureSubscription: 'sc-platform-dev'
+                      scriptType: bash
+                      scriptLocation: scriptPath
+                      scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-apply.sh
+                      arguments: >-
+                        "$(terraformBackendFile)"
+                        "$(downloadedPlanPath)"
+                      workingDirectory: $(selfRepoRoot)
+                      addSpnToEnvironment: true
+                    env:
+                      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      - ${{ if ne(parameters.useEnvironmentApprovals, true) }}:
+        - job: terraform_apply_dev
+          displayName: Terraform Apply Dev
+          steps:
+            - checkout: self
+              clean: true
+              persistCredentials: true
+              path: s/enterprise-ai-chatbot
+            - checkout: templateRepo
+              clean: true
+              persistCredentials: true
+              path: s/template
+
+            - task: Bash@3
+              displayName: Install Terraform
+              inputs:
+                targetType: filePath
+                filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+                arguments: $(terraformVersion)
+                workingDirectory: $(selfRepoRoot)
+
+            - task: DownloadPipelineArtifact@2
+              displayName: Download dev plan artifact
+              inputs:
+                buildType: current
+                artifactName: terraform-plan-dev
+                targetPath: $(Pipeline.Workspace)/terraform-plan-dev
+
+            - task: AzureCLI@2
+              displayName: Terraform apply dev
+              inputs:
+                azureSubscription: 'sc-platform-dev'
+                scriptType: bash
+                scriptLocation: scriptPath
+                scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-apply.sh
+                arguments: >-
+                  "$(terraformBackendFile)"
+                  "$(downloadedPlanPath)"
+                workingDirectory: $(selfRepoRoot)
+                addSpnToEnvironment: true
+              env:
+                SYSTEM_ACCESSTOKEN: $(System.AccessToken)
