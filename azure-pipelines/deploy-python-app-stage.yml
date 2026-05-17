@@ -1,0 +1,198 @@
+parameters:
+  - name: stageName
+    type: string
+  - name: displayName
+    type: string
+  - name: dependsOn
+    type: object
+  - name: condition
+    type: string
+  - name: azureSubscription
+    type: string
+  - name: terraformVarFile
+    type: string
+
+stages:
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.displayName }}
+    dependsOn: ${{ parameters.dependsOn }}
+    condition: ${{ parameters.condition }}
+    jobs:
+      - job: deploy_app_package
+        displayName: ${{ parameters.displayName }}
+        variables:
+          appPackageDownloadPath: '$(Pipeline.Workspace)/$(appPackageArtifactName)'
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: false
+            path: s/enterprise-ai-chatbot
+
+          - task: AzureCLI@2
+            displayName: Resolve deployment target
+            inputs:
+              azureSubscription: ${{ parameters.azureSubscription }}
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: $(selfRepoRoot)
+              inlineScript: |
+                set -euo pipefail
+
+                tfvars_path="$(selfRepoRoot)/${{ parameters.terraformVarFile }}"
+
+                python - "$tfvars_path" <<'PY'
+                import re
+                import sys
+                from pathlib import Path
+
+                path = Path(sys.argv[1])
+                text = path.read_text()
+
+                def read_string(name: str, default: str = "") -> str:
+                    match = re.search(rf'^\s*{re.escape(name)}\s*=\s*"([^"]*)"', text, re.MULTILINE)
+                    return match.group(1) if match else default
+
+                def read_bool(name: str, default: bool) -> bool:
+                    match = re.search(rf'^\s*{re.escape(name)}\s*=\s*(true|false)\b', text, re.MULTILINE | re.IGNORECASE)
+                    return match.group(1).lower() == "true" if match else default
+
+                workload = read_string("workload", "chatbot")
+                environment = read_string("environment", "").strip().lower() or "dev"
+                enable_app_service_stack = read_bool("enable_app_service_stack", True)
+                app_service_name = read_string("app_service_name").strip()
+                resource_group_name = read_string("resource_group_name").strip()
+                landingzone_resource_group_name = read_string("landingzone_resource_group_name").strip()
+                enable_scm_basic_auth = read_bool("app_service_scm_basic_auth_publishing_credentials_enabled", False)
+
+                if not enable_app_service_stack:
+                    print("##vso[task.logissue type=warning]App Service stack is disabled in tfvars. Skipping web deployment.")
+                    print("##vso[task.setvariable variable=skipWebDeploy]true")
+                    raise SystemExit(0)
+
+                if not app_service_name:
+                    workload_slug = workload.replace("_", "-").lower()
+                    app_service_name = f"app-{workload_slug}-{environment}"
+
+                if not resource_group_name:
+                    resource_group_name = landingzone_resource_group_name
+
+                if not resource_group_name:
+                    raise SystemExit("Unable to resolve resource_group_name from tfvars.")
+
+                print("##vso[task.setvariable variable=skipWebDeploy]false")
+                print(f"##vso[task.setvariable variable=resolvedAppServiceName]{app_service_name}")
+                print(f"##vso[task.setvariable variable=resolvedResourceGroup]{resource_group_name}")
+                print(f"##vso[task.setvariable variable=enableScmBasicAuth]{str(enable_scm_basic_auth).lower()}")
+                PY
+
+          - task: AzureCLI@2
+            displayName: Check deployment target
+            condition: ne(variables['skipWebDeploy'], 'true')
+            inputs:
+              azureSubscription: ${{ parameters.azureSubscription }}
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $appName = '$(resolvedAppServiceName)'.Trim()
+                $resourceGroup = '$(resolvedResourceGroup)'.Trim()
+
+                if ([string]::IsNullOrWhiteSpace($appName) -or [string]::IsNullOrWhiteSpace($resourceGroup)) {
+                  throw "Deployment target resolution failed. appName='${appName}' resourceGroup='${resourceGroup}'"
+                }
+
+                $appId = az resource show `
+                  --resource-group $resourceGroup `
+                  --name $appName `
+                  --resource-type "Microsoft.Web/sites" `
+                  --query id `
+                  --output tsv 2>$null
+
+                if ([string]::IsNullOrWhiteSpace($appId)) {
+                  Write-Host "##vso[task.logissue type=warning]App Service '$appName' was not found in resource group '$resourceGroup'. Skipping web deployment."
+                  Write-Host "##vso[task.setvariable variable=skipWebDeploy]true"
+                  exit 0
+                }
+
+                Write-Host "App Service '$appName' found in resource group '$resourceGroup'."
+
+          - task: DownloadPipelineArtifact@2
+            displayName: Download app package artifact
+            condition: ne(variables['skipWebDeploy'], 'true')
+            inputs:
+              buildType: current
+              artifactName: $(appPackageArtifactName)
+              targetPath: $(appPackageDownloadPath)
+
+          - task: AzureCLI@2
+            displayName: Deploy web package
+            condition: ne(variables['skipWebDeploy'], 'true')
+            inputs:
+              azureSubscription: ${{ parameters.azureSubscription }}
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: $(selfRepoRoot)
+              inlineScript: |
+                set -euo pipefail
+
+                app_name="$(resolvedAppServiceName)"
+                resource_group="$(resolvedResourceGroup)"
+                package_path="$(appPackageDownloadPath)/app.zip"
+
+                if [[ ! -f "${package_path}" ]]; then
+                  echo "Application package not found: ${package_path}" >&2
+                  exit 1
+                fi
+
+                az webapp config appsettings delete \
+                  --resource-group "${resource_group}" \
+                  --name "${app_name}" \
+                  --setting-names WEBSITE_RUN_FROM_PACKAGE || true
+
+                az webapp config appsettings set \
+                  --resource-group "${resource_group}" \
+                  --name "${app_name}" \
+                  --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true ENABLE_ORYX_BUILD=true
+
+                if [[ "$(enableScmBasicAuth)" == "true" ]]; then
+                  app_id="$(az webapp show \
+                    --resource-group "${resource_group}" \
+                    --name "${app_name}" \
+                    --query id \
+                    --output tsv)"
+
+                  az rest \
+                    --method put \
+                    --url "https://management.azure.com${app_id}/basicPublishingCredentialsPolicies/scm?api-version=2022-03-01" \
+                    --body '{"properties":{"allow":true}}' \
+                    --output none
+
+                  publish_profile="$(az webapp deployment list-publishing-credentials \
+                    --resource-group "${resource_group}" \
+                    --name "${app_name}" \
+                    --output json)"
+
+                  publish_user="$(python -c 'import json,sys; print(json.load(sys.stdin)["publishingUserName"])' <<< "${publish_profile}")"
+                  publish_password="$(python -c 'import json,sys; print(json.load(sys.stdin)["publishingPassword"])' <<< "${publish_profile}")"
+
+                  echo "Pinging Kudu endpoint to ensure basic auth is active..."
+                  for i in {1..12}; do
+                    if curl --fail --silent --show-error --user "${publish_user}:${publish_password}" "https://${app_name}.scm.azurewebsites.net/api/settings" --output /dev/null; then
+                      echo "Kudu is responsive and basic auth is active."
+                      break
+                    fi
+                    echo "Waiting for Kudu to apply settings and restart... ($i/12)"
+                    sleep 10
+                    if [ "$i" -eq 12 ]; then
+                      echo "Error: Kudu did not become responsive with basic auth in time." >&2
+                      exit 1
+                    fi
+                  done
+                fi
+
+                az webapp deploy \
+                  --resource-group "${resource_group}" \
+                  --name "${app_name}" \
+                  --src-path "${package_path}" \
+                  --type zip \
+                  --restart true \
+                  --track-status false
