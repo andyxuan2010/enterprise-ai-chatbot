@@ -1,0 +1,46 @@
+exclude: \.pdf$
+
+repos:
+  - repo: local
+    hooks:
+      - id: terraform-fmt-windows
+        name: terraform fmt (windows)
+        entry: powershell -NoProfile -ExecutionPolicy Bypass -Command "terraform fmt -recursive"
+        language: system
+        pass_filenames: false
+        files: \.(tf|tfvars|hcl)$
+
+      - id: terraform-validate-windows
+        name: terraform validate (windows)
+        entry: powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:TF_PLUGIN_TIMEOUT='200s'; terraform init -backend=false -input=false > $null; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; terraform validate"
+        language: system
+        pass_filenames: false
+        files: \.(tf|tfvars|hcl)$
+
+      - id: terraform-docs-windows
+        name: terraform docs (windows)
+        entry: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pre-commit-terraform-tools.ps1 -Tool terraform-docs
+        language: system
+        pass_filenames: false
+        files: \.(tf|tfvars|hcl)$
+
+      - id: tflint-windows
+        name: tflint (windows)
+        entry: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pre-commit-terraform-tools.ps1 -Tool tflint
+        language: system
+        pass_filenames: false
+        files: \.(tf|tfvars|hcl)$
+
+      - id: trivy-windows
+        name: trivy config scan (windows)
+        entry: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pre-commit-terraform-tools.ps1 -Tool trivy
+        language: system
+        pass_filenames: false
+        files: \.(tf|tfvars|hcl)$
+
+  # - repo: https://github.com/pre-commit/pre-commit-hooks
+  #   rev: v4.4.0
+  #   hooks:
+  #     - id: trailing-whitespace
+  #     - id: check-yaml
+  #     - id: detect-private-key
