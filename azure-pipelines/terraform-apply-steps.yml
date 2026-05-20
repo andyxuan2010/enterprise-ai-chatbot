@@ -1,0 +1,45 @@
+parameters:
+  - name: azureSubscription
+    type: string
+  - name: terraformBackendFile
+    type: string
+  - name: downloadedPlanPath
+    type: string
+  - name: artifactName
+    type: string
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: true
+    path: s/enterprise-ai-doc
+
+  - task: Bash@3
+    displayName: Install Terraform
+    inputs:
+      targetType: filePath
+      filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+      arguments: $(terraformVersion)
+      workingDirectory: $(selfRepoRoot)
+
+  - task: DownloadPipelineArtifact@2
+    displayName: Download plan artifact
+    inputs:
+      buildType: current
+      artifactName: ${{ parameters.artifactName }}
+      targetPath: $(Pipeline.Workspace)/${{ parameters.artifactName }}
+
+  - task: AzureCLI@2
+    displayName: Terraform apply
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-apply.sh
+      arguments: >-
+        "${{ parameters.terraformBackendFile }}"
+        "${{ parameters.downloadedPlanPath }}"
+      workingDirectory: $(selfRepoRoot)
+      addSpnToEnvironment: true
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
