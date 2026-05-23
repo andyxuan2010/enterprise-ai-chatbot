@@ -1,0 +1,216 @@
+parameters:
+  - name: useEnvironmentApprovals
+    type: boolean
+    default: false
+  - name: sandboxEnvironmentName
+    type: string
+    default: 'enterprise-ai-chatbot-sandbox'
+  - name: devEnvironmentName
+    type: string
+    default: 'enterprise-ai-chatbot-dev'
+
+name: $(Build.Repository.Name)
+
+resources:
+  repositories:
+    - repository: templateRepo
+      type: git
+      name: IaC/template
+      ref: refs/heads/main
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+      - dev
+      - sandbox
+      - sbx
+
+pr: none
+
+pool:
+  name: 'Azure Pipelines'
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - name: terraformVersion
+    value: '1.10.5'
+  - name: pythonVersion
+    value: '3.12'
+  - name: selfRepoRoot
+    value: '$(Pipeline.Workspace)/s/enterprise-ai-chatbot'
+  - name: appPackageArtifactName
+    value: 'python-app-package'
+  - name: appPackagePath
+    value: '$(Build.ArtifactStagingDirectory)/app-package/app.zip'
+  - name: appPackageRoot
+    value: '$(Build.ArtifactStagingDirectory)/app-package/root'
+
+stages:
+  - stage: Validate
+    displayName: Common Validation
+    jobs:
+      - job: terraform_validate
+        displayName: Terraform Validate
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: true
+            path: s/enterprise-ai-chatbot
+          - checkout: templateRepo
+            clean: true
+            persistCredentials: true
+            path: s/template
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+              arguments: $(terraformVersion)
+              workingDirectory: $(selfRepoRoot)
+
+          - task: Bash@3
+            displayName: Terraform fmt and validate
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-validate.sh
+              workingDirectory: $(selfRepoRoot)/terraform
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  - stage: BuildApp
+    displayName: Build App Package
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: build_app_package
+        displayName: Build Python app package
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: false
+            path: s/enterprise-ai-chatbot
+
+          - task: UsePythonVersion@0
+            displayName: Use Python $(pythonVersion)
+            inputs:
+              versionSpec: '$(pythonVersion)'
+
+          - task: Bash@3
+            displayName: Stage app files
+            inputs:
+              targetType: inline
+              workingDirectory: $(selfRepoRoot)
+              script: |
+                set -euo pipefail
+
+                package_root="$(appPackageRoot)"
+
+                rm -rf "${package_root}"
+                mkdir -p "${package_root}/app/api"
+
+                cp requirements.txt "${package_root}/requirements.txt"
+                cp startup.sh "${package_root}/startup.sh"
+
+                rsync -a \
+                  --exclude='.venv/' \
+                  --exclude='.venv311/' \
+                  --exclude='__pycache__/' \
+                  app/api/ "${package_root}/app/api/"
+
+          - task: Bash@3
+            displayName: Archive app package
+            inputs:
+              targetType: inline
+              workingDirectory: $(selfRepoRoot)
+              script: |
+                set -euo pipefail
+
+                python - <<'PY'
+                from pathlib import Path
+                from zipfile import ZIP_DEFLATED, ZipFile
+
+                source_dir = Path(r"$(appPackageRoot)")
+                archive_path = Path(r"$(appPackagePath)")
+                archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+                if archive_path.exists():
+                    archive_path.unlink()
+
+                with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as zf:
+                    for path in sorted(source_dir.rglob("*")):
+                        if path.is_file():
+                            zf.write(path, path.relative_to(source_dir))
+                PY
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish app package artifact
+            inputs:
+              targetPath: $(appPackagePath)
+              artifact: $(appPackageArtifactName)
+
+  - template: azure-pipelines/terraform-plan-stage.yml
+    parameters:
+      stageName: PlanSandbox
+      displayName: Plan Sandbox
+      dependsOn: Validate
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/sandbox'), eq(variables['Build.SourceBranch'], 'refs/heads/sbx')))
+      environmentName: sandbox
+      azureSubscription: 'sc-platform-sbx'
+
+  - template: azure-pipelines/terraform-plan-stage.yml
+    parameters:
+      stageName: PlanDev
+      displayName: Plan Dev
+      dependsOn: Validate
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/dev')))
+      environmentName: dev
+      azureSubscription: 'sc-platform-dev'
+
+  - template: azure-pipelines/terraform-apply-stage.yml
+    parameters:
+      stageName: ApplySandbox
+      displayName: Apply Sandbox
+      dependsOn: PlanSandbox
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/sandbox'), eq(variables['Build.SourceBranch'], 'refs/heads/sbx')))
+      environmentName: sandbox
+      adoEnvironmentName: ${{ parameters.sandboxEnvironmentName }}
+      azureSubscription: 'sc-platform-sbx'
+      useEnvironmentApprovals: ${{ parameters.useEnvironmentApprovals }}
+
+  - template: azure-pipelines/deploy-python-app-stage.yml
+    parameters:
+      stageName: DeploySandboxApp
+      displayName: Deploy Sandbox App
+      dependsOn:
+        - BuildApp
+        - ApplySandbox
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/sandbox'), eq(variables['Build.SourceBranch'], 'refs/heads/sbx')))
+      azureSubscription: 'sc-platform-sbx'
+      terraformVarFile: 'terraform/environments/sandbox/terraform.tfvars'
+
+  - template: azure-pipelines/terraform-apply-stage.yml
+    parameters:
+      stageName: ApplyDev
+      displayName: Apply Dev
+      dependsOn:
+        - PlanDev
+        #- ApplySandbox
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/dev')))
+      environmentName: dev
+      adoEnvironmentName: ${{ parameters.devEnvironmentName }}
+      azureSubscription: 'sc-platform-dev'
+      useEnvironmentApprovals: ${{ parameters.useEnvironmentApprovals }}
+
+  - template: azure-pipelines/deploy-python-app-stage.yml
+    parameters:
+      stageName: DeployDevApp
+      displayName: Deploy Dev App
+      dependsOn:
+        - BuildApp
+        - ApplyDev
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/dev')))
+      azureSubscription: 'sc-platform-dev'
+      terraformVarFile: 'terraform/environments/dev/terraform.tfvars'

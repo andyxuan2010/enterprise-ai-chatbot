@@ -1,0 +1,75 @@
+name: "Setup Terraform"
+description: "Configures Git auth, resolves execution context, sets up Terraform, and runs terraform init."
+inputs:
+  environment_name:
+    description: "The environment to deploy to (e.g. dev, sandbox, prod)"
+    required: true
+  azure_ado_pat:
+    description: "The Azure DevOps PAT for module downloads"
+    required: true
+  use_oidc:
+    description: "Whether to configure the backend for OIDC"
+    required: false
+    default: "false"
+
+outputs:
+  deploy_env:
+    description: "Deployment environment name"
+    value: ${{ steps.context.outputs.deploy_env }}
+  terraform_var_file:
+    description: "Path to terraform var file"
+    value: ${{ steps.context.outputs.terraform_var_file }}
+  terraform_backend_file:
+    description: "Path to terraform backend file"
+    value: ${{ steps.context.outputs.terraform_backend_file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure Git auth for Terraform module downloads
+      shell: bash
+      env:
+        AZURE_ADO_PAT2: ${{ inputs.azure_ado_pat }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${AZURE_ADO_PAT2}" ]]; then
+          echo "Missing required secret: AZURE_ADO_PAT2" >&2
+          exit 1
+        fi
+
+        git config --global --unset-all http.https://dev.azure.com/.extraheader || true
+        git config --global --unset-all url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf || true
+        git config --global url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf "https://dev.azure.com/"
+
+    - name: Resolve execution context
+      id: context
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "deploy_env=${{ inputs.environment_name }}" >> "${GITHUB_OUTPUT}"
+        echo "terraform_var_file=environments/${{ inputs.environment_name }}/terraform.tfvars" >> "${GITHUB_OUTPUT}"
+        echo "terraform_backend_file=environments/${{ inputs.environment_name }}/backend.hcl" >> "${GITHUB_OUTPUT}"
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Terraform Init
+      shell: bash
+      working-directory: terraform
+      run: |
+        if [[ "${{ inputs.use_oidc }}" == "true" ]]; then
+          terraform init \
+            -input=false \
+            -no-color \
+            -reconfigure \
+            -backend-config="${{ steps.context.outputs.terraform_backend_file }}" \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true"
+        else
+          terraform init \
+            -input=false \
+            -no-color \
+            -reconfigure \
+            -backend-config="${{ steps.context.outputs.terraform_backend_file }}"
+        fi
