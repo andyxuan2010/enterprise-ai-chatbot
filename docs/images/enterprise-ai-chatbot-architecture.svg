@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1672" height="940" viewBox="0 0 1672 940" role="img" aria-labelledby="title desc">
+  <title id="title">Enterprise AI Chatbot on Azure</title>
+  <desc id="desc">Document-grounded RAG architecture showing browser, App Service, Entra ID, Azure AI Search, Azure OpenAI, Blob Storage, document sources, shared platform resources, and Terraform workload repo boundaries.</desc>
+  <defs>
+    <style>
+      .bg { fill: #fbfdff; }
+      .title { fill: #0b2d66; font: 700 54px Arial, sans-serif; }
+      .subtitle { fill: #0969da; font: 700 30px Arial, sans-serif; }
+      .note { fill: #082b5f; font: 18px Arial, sans-serif; }
+      .box { fill: #fff; stroke: #0969da; stroke-width: 2; rx: 10; }
+      .panel { fill: #fff; stroke: #6941c6; stroke-width: 1.6; rx: 12; }
+      .shared { fill: #fbfff8; stroke: #238636; stroke-width: 1.5; stroke-dasharray: 7 4; rx: 12; }
+      .shared-card { fill: #fff; stroke: #238636; stroke-width: 1.2; rx: 9; }
+      .icon-circle { fill: #e8f1ff; stroke: #0969da; stroke-width: 1.6; }
+      .azure { fill: #1677e8; }
+      .azure2 { fill: #43b7f2; }
+      .green { fill: #238636; }
+      .purple { fill: #6941c6; }
+      .text { fill: #0f172a; font: 20px Arial, sans-serif; }
+      .small { fill: #0f172a; font: 16px Arial, sans-serif; }
+      .tiny { fill: #0f172a; font: 14px Arial, sans-serif; }
+      .label { fill: #0f172a; font: 16px Arial, sans-serif; }
+      .bold { font-weight: 700; }
+      .line { stroke: #0969da; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #0969da; stroke-width: 2.3; fill: none; stroke-dasharray: 8 7; marker-end: url(#arrow); }
+      .green-line { stroke: #238636; stroke-width: 2.3; fill: none; stroke-dasharray: 8 6; marker-end: url(#green-arrow); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0969da"/>
+    </marker>
+    <marker id="green-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#238636"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1672" height="940"/>
+  <text class="title" x="836" y="58" text-anchor="middle">Enterprise AI Chatbot on Azure</text>
+  <text class="subtitle" x="836" y="98" text-anchor="middle">Document-grounded RAG architecture</text>
+  <rect class="box" x="508" y="110" width="690" height="46" rx="7"/>
+  <circle cx="536" cy="133" r="11" fill="#eef6ff" stroke="#0969da" stroke-width="2"/>
+  <text class="note bold" x="536" y="139" text-anchor="middle">i</text>
+  <text class="note" x="560" y="139">Runtime searches indexed enterprise content only; no public internet search.</text>
+
+  <rect class="box" x="398" y="172" width="218" height="94"/>
+  <path class="azure2" d="M456 190 420 238l34 18 34-46z"/>
+  <path class="azure" d="M456 190 490 242l-36 14-16-40z"/>
+  <path fill="#7bd3ff" d="M420 238 454 256l36-14-52-26z"/>
+  <text class="text bold" x="502" y="211">Microsoft</text>
+  <text class="text bold" x="502" y="241">Entra ID</text>
+
+  <rect class="box" x="398" y="334" width="242" height="296"/>
+  <circle class="icon-circle" cx="519" cy="403" r="37"/>
+  <path class="azure" d="M519 365a38 38 0 1 1 0 76 38 38 0 0 1 0-76zm-5 18v40h10v-40zm-23 15v10h56v-10z" opacity=".9"/>
+  <text class="text bold" x="519" y="479" text-anchor="middle">Azure App Service</text>
+  <text class="text" x="519" y="509" text-anchor="middle">(Linux, Python)</text>
+  <line x1="422" y1="534" x2="616" y2="534" stroke="#9cc8ff" stroke-width="2"/>
+  <text class="text" x="519" y="574" text-anchor="middle">UI + /chat API</text>
+  <text class="text" x="519" y="601" text-anchor="middle">+ Orchestrator</text>
+
+  <rect class="box" x="40" y="361" width="160" height="186"/>
+  <rect x="80" y="383" width="78" height="70" rx="8" fill="#eef6ff" stroke="#0969da" stroke-width="3"/>
+  <line x1="80" y1="402" x2="158" y2="402" stroke="#0969da" stroke-width="3"/>
+  <circle cx="92" cy="393" r="3" fill="#0969da"/>
+  <circle cx="103" cy="393" r="3" fill="#0969da"/>
+  <circle cx="114" cy="393" r="3" fill="#0969da"/>
+  <path d="M114 412h32v25h-12l-9 10v-10h-11z" fill="#fff" stroke="#0969da" stroke-width="3"/>
+  <text class="text bold" x="120" y="499" text-anchor="middle">User / Browser</text>
+  <text class="small" x="120" y="527" text-anchor="middle">Web UI / Chat UX</text>
+
+  <rect class="box" x="855" y="263" width="315" height="118"/>
+  <circle class="azure" cx="921" cy="322" r="34"/>
+  <path d="M904 339l25-25m-4-13a20 20 0 1 1-1 1" stroke="#fff" stroke-width="8" fill="none" stroke-linecap="round"/>
+  <text class="text bold" x="990" y="310">Azure AI Search</text>
+  <text class="text" x="990" y="341">Hybrid retrieval index</text>
+
+  <rect class="box" x="879" y="465" width="286" height="191"/>
+  <text class="text bold" x="1003" y="514">Azure OpenAI</text>
+  <circle cx="940" cy="506" r="25" fill="#fff" stroke="#0969da" stroke-width="4"/>
+  <path d="M925 506c0-16 18-27 31-17m-26 37c-14-8-14-31 0-39m34 15c14 8 14 31 0 39m-5-48c14 8 14 31 0 39m-34-15c-14-8-14-31 0-39" stroke="#0969da" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <rect x="917" y="544" width="202" height="39" rx="6" fill="#f5f9ff" stroke="#0969da"/>
+  <text class="small" x="1018" y="569" text-anchor="middle">Embeddings</text>
+  <rect x="917" y="592" width="202" height="54" rx="6" fill="#f5f9ff" stroke="#0969da"/>
+  <text class="small" x="1018" y="615" text-anchor="middle">Rerank + grounded</text>
+  <text class="small" x="1018" y="638" text-anchor="middle">answer generation</text>
+
+  <rect class="box" x="1350" y="188" width="272" height="174"/>
+  <text class="text bold" x="1486" y="224" text-anchor="middle">Document Sources</text>
+  <rect x="1370" y="250" width="40" height="52" fill="#fff" stroke="#d1242f" stroke-width="2"/>
+  <path d="M1400 250v14h10" fill="none" stroke="#d1242f" stroke-width="2"/>
+  <text x="1390" y="291" text-anchor="middle" fill="#d1242f" font="700 18px Arial">PDF</text>
+  <rect x="1444" y="250" width="40" height="52" fill="#fff" stroke="#0969da" stroke-width="2"/>
+  <path d="M1474 250v14h10" fill="none" stroke="#0969da" stroke-width="2"/>
+  <text x="1464" y="291" text-anchor="middle" fill="#0969da" font="700 20px Arial">W</text>
+  <rect x="1506" y="250" width="40" height="52" fill="#fff" stroke="#57606a" stroke-width="2"/>
+  <path d="M1536 250v14h10" fill="none" stroke="#57606a" stroke-width="2"/>
+  <text x="1526" y="291" text-anchor="middle" fill="#57606a" font="700 20px Arial">MD</text>
+  <rect x="1568" y="250" width="40" height="52" fill="#fff" stroke="#57606a" stroke-width="2"/>
+  <path d="M1598 250v14h10" fill="none" stroke="#57606a" stroke-width="2"/>
+  <text x="1588" y="291" text-anchor="middle" fill="#57606a" font="700 18px Arial">TXT</text>
+  <text class="text" x="1486" y="341" text-anchor="middle">PDF, DOCX, MD, TXT</text>
+
+  <rect class="box" x="1328" y="464" width="294" height="108"/>
+  <path class="azure" d="M1350 518l25-31h36l25 31-25 31h-36z"/>
+  <path d="M1382 500h22v36h-22zm8 8h8m-8 8h14m-14 8h14" stroke="#fff" stroke-width="3" fill="none"/>
+  <text class="text bold" x="1430" y="514">Azure Blob Storage</text>
+  <text class="small" x="1430" y="543">Source files / previews</text>
+
+  <rect class="shared" x="53" y="696" width="1070" height="194"/>
+  <text class="text bold green" x="588" y="734" text-anchor="middle">Shared platform resources (reused from landing zone)</text>
+  <rect class="shared-card" x="83" y="761" width="235" height="94"/>
+  <circle cx="132" cy="808" r="31" fill="#eef6ff" stroke="#0969da" stroke-width="2"/>
+  <path d="M132 789a16 16 0 0 0-9 29v20h15v-11h8v-9a16 16 0 0 0-14-29z" fill="#f2b705"/>
+  <text class="small bold" x="178" y="803">Key Vault</text>
+  <text class="tiny" x="178" y="829">Secrets &amp; keys</text>
+  <rect class="shared-card" x="350" y="761" width="235" height="94"/>
+  <circle class="azure2" cx="407" cy="808" r="27"/>
+  <rect x="385" y="814" width="12" height="22" fill="#0969da"/>
+  <rect x="403" y="802" width="12" height="34" fill="#fff"/>
+  <rect x="421" y="792" width="12" height="44" fill="#0969da"/>
+  <text class="small bold" x="446" y="803">Log Analytics</text>
+  <text class="tiny" x="446" y="829">Logs &amp; monitoring</text>
+  <rect class="shared-card" x="613" y="761" width="238" height="94"/>
+  <circle class="azure" cx="671" cy="808" r="27"/>
+  <path d="M650 809h42m-31-15v30m21-22v22" stroke="#fff" stroke-width="3"/>
+  <text class="small bold" x="720" y="803">Azure AI Service</text>
+  <text class="tiny" x="720" y="829">Speech, Vision, etc.</text>
+  <rect class="shared-card" x="880" y="761" width="230" height="94"/>
+  <rect x="897" y="783" width="58" height="48" rx="3" fill="#1fbcb8"/>
+  <rect x="897" y="800" width="58" height="9" fill="#fff" opacity=".8"/>
+  <rect x="897" y="823" width="58" height="9" fill="#0f766e"/>
+  <text class="small bold" x="977" y="803">Storage Account</text>
+  <text class="tiny" x="977" y="829">App data &amp; artifacts</text>
+
+  <rect class="panel" x="1178" y="671" width="468" height="241"/>
+  <path class="purple" d="M1215 683l34 16v37l-34-16zm39 16 34-16v37l-34 16zm-39 26 34 16v22l-34-16z"/>
+  <text class="text bold" x="1262" y="708">Terraform workload repo</text>
+  <line x1="1205" y1="727" x2="1584" y2="727" stroke="#b8a5ff" stroke-width="1.5"/>
+  <text class="small bold" x="1205" y="758">Provisions:</text>
+  <text class="tiny" x="1205" y="785">• App Resource Group</text>
+  <text class="tiny" x="1205" y="809">• Linux App Service Plan</text>
+  <text class="tiny" x="1205" y="833">• Linux Python App Service</text>
+  <text class="tiny" x="1205" y="857">• Entra App Registration</text>
+  <line x1="1436" y1="746" x2="1436" y2="893" stroke="#b8a5ff"/>
+  <text class="small bold" x="1462" y="758">Reuses:</text>
+  <text class="tiny" x="1462" y="785">• Azure OpenAI</text>
+  <text class="tiny" x="1462" y="809">• Azure AI Search</text>
+  <text class="tiny" x="1462" y="833">• Key Vault</text>
+  <text class="tiny" x="1462" y="857">• Storage</text>
+  <text class="tiny" x="1462" y="881">• Log Analytics</text>
+
+  <path class="line" d="M200 413h196"/>
+  <text class="label" x="248" y="397">Ask question</text>
+  <path class="line" d="M398 501H202"/>
+  <text class="label" x="227" y="533">Answer + citations</text>
+  <path class="line" d="M502 266v66"/>
+  <text class="label" x="520" y="303">Sign-in / Auth</text>
+  <path class="line" d="M640 360h184v-33h29"/>
+  <text class="label" x="679" y="334">Query rewrite +</text>
+  <text class="label" x="679" y="356">hybrid retrieval</text>
+  <path class="dash" d="M868 380v36H644"/>
+  <text class="label" x="673" y="444">Retrieved evidence</text>
+  <path class="line" d="M640 548h236"/>
+  <text class="label" x="671" y="515">Embeddings, rerank,</text>
+  <text class="label" x="671" y="543">answer generation</text>
+  <path class="dash" d="M880 599H644"/>
+  <text class="label" x="677" y="625">Grounded response</text>
+  <path class="line" d="M1350 313h-177"/>
+  <text class="label" x="1208" y="275">Chunk + index</text>
+  <text class="label" x="1235" y="299">content</text>
+  <path class="line" d="M1450 362v100"/>
+  <text class="label" x="1471" y="403">Upload / store</text>
+  <text class="label" x="1471" y="426">source documents</text>
+  <path class="dash" d="M1328 493h-92v-147h-63"/>
+  <path class="green-line" d="M512 696v-63"/>
+</svg>
