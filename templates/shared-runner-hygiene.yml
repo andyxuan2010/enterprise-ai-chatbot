@@ -1,0 +1,236 @@
+parameters:
+  jobHomeName: 'job-home'
+  jobTmpName: 'job-tmp'
+  jobCacheName: 'job-cache'
+  cleanupSystemGitConfig: true
+  runInitialization: true
+  runPreJobCleanup: true
+  runCachePrep: true
+  runPostJobCleanup: true
+  configureNodeCache: false
+  configurePythonCache: false
+  configureNuGetCache: false
+  configureTerraformCache: false
+
+steps:
+  - ${{ if eq(parameters.runInitialization, true) }}:
+    - pwsh: |
+        $jobHome = Join-Path "$(Agent.TempDirectory)" "${{ parameters.jobHomeName }}"
+        $jobTmp = Join-Path "$(Agent.TempDirectory)" "${{ parameters.jobTmpName }}"
+        $jobCache = Join-Path "$(Agent.TempDirectory)" "${{ parameters.jobCacheName }}"
+        $jobGitConfig = Join-Path $jobHome ".gitconfig"
+
+        New-Item -ItemType Directory -Force -Path $jobHome, $jobTmp, $jobCache | Out-Null
+        New-Item -ItemType File -Force -Path $jobGitConfig | Out-Null
+
+        Write-Host "Using job-scoped home: $jobHome"
+        Write-Host "Using job-scoped tmp: $jobTmp"
+        Write-Host "Using job-scoped cache: $jobCache"
+
+        Write-Host "##vso[task.setvariable variable=RUNNER_JOB_HOME]$jobHome"
+        Write-Host "##vso[task.setvariable variable=RUNNER_JOB_TMP]$jobTmp"
+        Write-Host "##vso[task.setvariable variable=RUNNER_JOB_CACHE]$jobCache"
+        Write-Host "##vso[task.setvariable variable=RUNNER_JOB_GIT_CONFIG]$jobGitConfig"
+
+        Write-Host "##vso[task.setvariable variable=HOME]$jobHome"
+        Write-Host "##vso[task.setvariable variable=TMPDIR]$jobTmp"
+        Write-Host "##vso[task.setvariable variable=TMP]$jobTmp"
+        Write-Host "##vso[task.setvariable variable=TEMP]$jobTmp"
+        Write-Host "##vso[task.setvariable variable=USERPROFILE]$jobHome"
+        Write-Host "##vso[task.setvariable variable=GIT_CONFIG_GLOBAL]$jobGitConfig"
+
+        Write-Host "##vso[task.setvariable variable=npm_config_cache]$(Join-Path $jobCache 'npm')"
+        Write-Host "##vso[task.setvariable variable=PIP_CACHE_DIR]$(Join-Path $jobCache 'pip')"
+        Write-Host "##vso[task.setvariable variable=NUGET_PACKAGES]$(Join-Path $jobCache 'nuget')"
+        Write-Host "##vso[task.setvariable variable=TF_PLUGIN_CACHE_DIR]$(Join-Path $jobCache 'terraform')"
+      displayName: Initialize shared-runner job isolation
+
+  - ${{ if eq(parameters.runPreJobCleanup, true) }}:
+    - pwsh: |
+        function Invoke-GitCommand {
+          param([string[]]$Arguments)
+
+          $output = & git @Arguments 2>$null
+          $exitCode = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+
+          return [PSCustomObject]@{
+            Output = @($output)
+            ExitCode = $exitCode
+          }
+        }
+
+        function Get-ExtraHeaderKeys {
+          param([string]$Scope)
+
+          $args = @('config')
+          if ($Scope -eq 'system') {
+            $args += '--system'
+          } else {
+            $args += "--$Scope"
+          }
+          $args += @('--name-only', '--get-regexp', '.*extraheader$')
+
+          $result = Invoke-GitCommand -Arguments $args
+          if ($result.ExitCode -ne 0 -or -not $result.Output) {
+            return @()
+          }
+
+          return @($result.Output | Sort-Object -Unique)
+        }
+
+        function Remove-ExtraHeaders {
+          param([string]$Scope)
+
+          $keys = Get-ExtraHeaderKeys -Scope $Scope
+          if ($keys.Count -eq 0) {
+            Write-Host "No $Scope extraheaders found"
+            return
+          }
+
+          foreach ($key in $keys) {
+            Write-Host "Removing $Scope key: $key"
+            $args = @('config')
+            if ($Scope -eq 'system') {
+              $args += '--system'
+            } else {
+              $args += "--$Scope"
+            }
+            $args += @('--unset-all', $key)
+            $result = Invoke-GitCommand -Arguments $args
+            if ($result.ExitCode -ne 0) {
+              Write-Host "Skipping $Scope key cleanup for $key because git exited with code $($result.ExitCode)"
+            }
+          }
+        }
+
+        Write-Host "===== BEFORE CLEANUP ====="
+        $before = (Invoke-GitCommand -Arguments @('config', '--list', '--show-origin')).Output | Select-String 'extraheader'
+        if ($before) {
+          $before | ForEach-Object { Write-Host $_ }
+        } else {
+          Write-Host "No extraheaders found"
+        }
+
+        Remove-ExtraHeaders -Scope 'local'
+        Remove-ExtraHeaders -Scope 'global'
+
+        if ("${{ parameters.cleanupSystemGitConfig }}" -eq "true") {
+          Remove-ExtraHeaders -Scope 'system'
+        } else {
+          Write-Host "Skipping system git config cleanup"
+        }
+
+        Write-Host "===== AFTER CLEANUP ====="
+        $after = (Invoke-GitCommand -Arguments @('config', '--list', '--show-origin')).Output | Select-String 'extraheader'
+        if ($after) {
+          $after | ForEach-Object { Write-Host $_ }
+        } else {
+          Write-Host "No extraheaders remain"
+        }
+      displayName: Pre-job Git auth cleanup
+
+  - ${{ if eq(parameters.runCachePrep, true) }}:
+    - pwsh: |
+        New-Item -ItemType Directory -Force -Path "$(RUNNER_JOB_CACHE)" | Out-Null
+
+        if ("${{ parameters.configureNodeCache }}" -eq "true") {
+          New-Item -ItemType Directory -Force -Path "$(npm_config_cache)" | Out-Null
+          Write-Host "Node cache ready at $(npm_config_cache)"
+        }
+
+        if ("${{ parameters.configurePythonCache }}" -eq "true") {
+          New-Item -ItemType Directory -Force -Path "$(PIP_CACHE_DIR)" | Out-Null
+          Write-Host "Python cache ready at $(PIP_CACHE_DIR)"
+        }
+
+        if ("${{ parameters.configureNuGetCache }}" -eq "true") {
+          New-Item -ItemType Directory -Force -Path "$(NUGET_PACKAGES)" | Out-Null
+          Write-Host "NuGet cache ready at $(NUGET_PACKAGES)"
+        }
+
+        if ("${{ parameters.configureTerraformCache }}" -eq "true") {
+          New-Item -ItemType Directory -Force -Path "$(TF_PLUGIN_CACHE_DIR)" | Out-Null
+          Write-Host "Terraform cache ready at $(TF_PLUGIN_CACHE_DIR)"
+        }
+      displayName: Prepare tool-specific cache directories
+
+  - ${{ if eq(parameters.runPostJobCleanup, true) }}:
+    - pwsh: |
+        function Invoke-GitCommand {
+          param([string[]]$Arguments)
+
+          $output = & git @Arguments 2>$null
+          $exitCode = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+
+          return [PSCustomObject]@{
+            Output = @($output)
+            ExitCode = $exitCode
+          }
+        }
+
+        function Get-ExtraHeaderKeys {
+          param([string]$Scope)
+
+          $args = @('config')
+          if ($Scope -eq 'system') {
+            $args += '--system'
+          } else {
+            $args += "--$Scope"
+          }
+          $args += @('--name-only', '--get-regexp', '.*extraheader$')
+
+          $result = Invoke-GitCommand -Arguments $args
+          if ($result.ExitCode -ne 0 -or -not $result.Output) {
+            return @()
+          }
+
+          return @($result.Output | Sort-Object -Unique)
+        }
+
+        function Remove-ExtraHeaders {
+          param([string]$Scope)
+
+          foreach ($key in (Get-ExtraHeaderKeys -Scope $Scope)) {
+            Write-Host "Removing $Scope key: $key"
+            $args = @('config')
+            if ($Scope -eq 'system') {
+              $args += '--system'
+            } else {
+              $args += "--$Scope"
+            }
+            $args += @('--unset-all', $key)
+            $result = Invoke-GitCommand -Arguments $args
+            if ($result.ExitCode -ne 0) {
+              Write-Host "Skipping $Scope key cleanup for $key because git exited with code $($result.ExitCode)"
+            }
+          }
+        }
+
+        Remove-ExtraHeaders -Scope 'local'
+        Remove-ExtraHeaders -Scope 'global'
+
+        if ("${{ parameters.cleanupSystemGitConfig }}" -eq "true") {
+          Remove-ExtraHeaders -Scope 'system'
+        }
+
+        $agentTemp = [System.IO.Path]::GetFullPath("$(Agent.TempDirectory)")
+        $cleanupTargets = @("$(RUNNER_JOB_HOME)", "$(RUNNER_JOB_TMP)", "$(RUNNER_JOB_CACHE)") |
+          Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -notmatch '^\$\(' } |
+          ForEach-Object {
+            try {
+              [System.IO.Path]::GetFullPath($_)
+            } catch {
+              Write-Host "Skipping cleanup target with invalid path: $_"
+              $null
+            }
+          } |
+          Where-Object { $_ -and $_.StartsWith($agentTemp, [System.StringComparison]::OrdinalIgnoreCase) }
+
+        foreach ($path in $cleanupTargets) {
+          Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $global:LASTEXITCODE = 0
+      displayName: Post-job shared-runner cleanup
+      condition: always()
