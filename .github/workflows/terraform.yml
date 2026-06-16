@@ -1,0 +1,1105 @@
+name: Terraform
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - sandbox
+      - sbx
+  pull_request:
+    branches:
+      - main
+      - dev
+      - sandbox
+      - sbx
+  workflow_dispatch:
+    inputs:
+      ENABLE_GITHUB_APPLY:
+        description: Run terraform apply after plan for this workflow run
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: terraform-${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validation-precheck:
+    name: Check Required Secrets and Variables
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      has_infracost_api_key: ${{ steps.check.outputs.has_infracost_api_key }}
+      has_module_download_secret: ${{ steps.check.outputs.has_module_download_secret }}
+      has_template_repo: ${{ steps.check.outputs.has_template_repo }}
+      has_deploy_envs: ${{ steps.check.outputs.has_deploy_envs }}
+      has_apply_inputs: ${{ steps.check.outputs.has_apply_inputs }}
+      has_deploy_dev: ${{ steps.check.outputs.has_deploy_dev }}
+      has_deploy_sandbox: ${{ steps.check.outputs.has_deploy_sandbox }}
+      has_stage_publish_inputs: ${{ steps.check.outputs.has_stage_publish_inputs }}
+      has_ado_dev_publish_inputs: ${{ steps.check.outputs.has_ado_dev_publish_inputs }}
+      has_ado_sandbox_publish_inputs: ${{ steps.check.outputs.has_ado_sandbox_publish_inputs }}
+      is_stage_repository: ${{ steps.check.outputs.is_stage_repository }}
+    steps:
+      - name: Evaluate required secrets and variables
+        id: check
+        shell: bash
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+          AZURE_ADO_PAT2: ${{ secrets.AZURE_ADO_PAT2 }}
+          DEPLOY_DEV: ${{ vars.DEPLOY_DEV }}
+          DEPLOY_SANDBOX: ${{ vars.DEPLOY_SANDBOX }}
+          ENABLE_GITHUB_APPLY: ${{ vars.ENABLE_GITHUB_APPLY }}
+          ENABLE_GITHUB_APPLY_MANUAL: ${{ github.event_name == 'workflow_dispatch' && inputs.ENABLE_GITHUB_APPLY == true && 'true' || 'false' }}
+          STAGE_REPOSITORY: ${{ vars.STAGE_REPOSITORY }}
+          STAGE_REPO_TOKEN: ${{ secrets.STAGE_REPO_TOKEN }}
+          GH_TF_TEMPLATE_REPO: ${{ vars.GH_TF_TEMPLATE_REPO }}
+          ADO_DEV_REPOSITORY: ${{ vars.ADO_DEV_REPOSITORY }}
+          ADO_DEV_REPO_PAT: ${{ secrets.ADO_DEV_REPO_PAT }}
+          PUBLISH_ADO_SANDBOX: ${{ vars.PUBLISH_ADO_SANDBOX }}
+          ADO_SANDBOX_REPOSITORY: ${{ vars.ADO_SANDBOX_REPOSITORY }}
+          ADO_SANDBOX_REPO_PAT: ${{ secrets.ADO_SANDBOX_REPO_PAT }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          write_check() {
+            local input_type="$1"
+            local input_name="$2"
+            local input_value="$3"
+            local blue="\033[34m"
+            local yellow="\033[33m"
+            local green="\033[32m"
+            local red="\033[31m"
+            local reset="\033[0m"
+
+            if [[ -n "${input_value}" ]]; then
+              printf -- "- %b%s%b %b%s%b: %bpresent%b\n" "${blue}" "${input_type}" "${reset}" "${yellow}" "${input_name}" "${reset}" "${green}" "${reset}"
+            else
+              printf -- "- %b%s%b %b%s%b: %bmissing%b\n" "${blue}" "${input_type}" "${reset}" "${yellow}" "${input_name}" "${reset}" "${red}" "${reset}"
+            fi
+          }
+
+          enable_github_apply=""
+          deploy_envs_display=""
+          ado_sandbox_publish_display=""
+
+          [[ "${ENABLE_GITHUB_APPLY,,}" == "true" || "${ENABLE_GITHUB_APPLY_MANUAL,,}" == "true" ]] && enable_github_apply="true"
+          [[ "${DEPLOY_DEV,,}" == "true" || "${DEPLOY_SANDBOX,,}" == "true" ]] && deploy_envs_display="true"
+          [[ "${PUBLISH_ADO_SANDBOX,,}" == "true" ]] && ado_sandbox_publish_display="true"
+
+          echo "::group::Required secrets and variables"
+          echo "Validate and plan require:"
+          write_check "secret" "AZURE_ADO_PAT2" "${AZURE_ADO_PAT2}"
+          write_check "variable" "GH_TF_TEMPLATE_REPO" "${GH_TF_TEMPLATE_REPO}"
+          write_check "variable" "DEPLOY_DEV=true or DEPLOY_SANDBOX=true" "${deploy_envs_display}"
+          echo "GitHub Environment secrets ARM_CLIENT_ID, ARM_CLIENT_SECRET, ARM_TENANT_ID, and ARM_SUBSCRIPTION_ID are checked inside each deploy environment job."
+          echo ""
+          echo "Apply requires:"
+          write_check "variable/input" "ENABLE_GITHUB_APPLY=true" "${enable_github_apply}"
+          write_check "secret" "AZURE_ADO_PAT2" "${AZURE_ADO_PAT2}"
+          write_check "variable" "GH_TF_TEMPLATE_REPO" "${GH_TF_TEMPLATE_REPO}"
+          write_check "variable" "DEPLOY_DEV=true or DEPLOY_SANDBOX=true" "${deploy_envs_display}"
+          echo "GitHub Environment Azure secrets are checked inside the apply job."
+          echo ""
+          echo "Infracost requires:"
+          write_check "secret" "INFRACOST_API_KEY" "${INFRACOST_API_KEY}"
+          echo ""
+          echo "Publish Github Stage Repo requires:"
+          write_check "variable" "STAGE_REPOSITORY" "${STAGE_REPOSITORY}"
+          write_check "secret" "STAGE_REPO_TOKEN" "${STAGE_REPO_TOKEN}"
+          echo ""
+          echo "Publish ADO Dev Repo requires:"
+          write_check "variable" "ADO_DEV_REPOSITORY" "${ADO_DEV_REPOSITORY}"
+          write_check "secret" "ADO_DEV_REPO_PAT" "${ADO_DEV_REPO_PAT}"
+          echo ""
+          echo "Publish ADO Sandbox Repo requires:"
+          write_check "variable" "PUBLISH_ADO_SANDBOX=true" "${ado_sandbox_publish_display}"
+          write_check "variable" "ADO_SANDBOX_REPOSITORY" "${ADO_SANDBOX_REPOSITORY}"
+          write_check "secret" "ADO_SANDBOX_REPO_PAT" "${ADO_SANDBOX_REPO_PAT}"
+          echo "::endgroup::"
+
+          stage_repository_normalized=""
+          if [[ -n "${STAGE_REPOSITORY}" ]]; then
+            stage_repository_normalized="${STAGE_REPOSITORY#https://github.com/}"
+          fi
+          stage_repository_normalized="${stage_repository_normalized%.git}"
+          stage_repository_normalized="${stage_repository_normalized#/}"
+          stage_repository_normalized="${stage_repository_normalized%/}"
+
+          if [[ -n "${stage_repository_normalized}" && "${CURRENT_REPOSITORY,,}" == "${stage_repository_normalized,,}" ]]; then
+            echo "is_stage_repository=true" >> "${GITHUB_OUTPUT}"
+            echo "Current repository matches the configured stage repository. Loop-prone jobs will be skipped for github-actions[bot]."
+          else
+            echo "is_stage_repository=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+          [[ -n "${INFRACOST_API_KEY}" ]] && echo "has_infracost_api_key=true" >> "${GITHUB_OUTPUT}" || echo "has_infracost_api_key=false" >> "${GITHUB_OUTPUT}"
+
+          if [[ -n "${AZURE_ADO_PAT2}" ]]; then
+            echo "has_module_download_secret=true" >> "${GITHUB_OUTPUT}"
+            has_module_download_secret="true"
+          else
+            echo "has_module_download_secret=false" >> "${GITHUB_OUTPUT}"
+            has_module_download_secret="false"
+            echo "Terraform module download secret is missing. Validate/plan jobs will be skipped."
+          fi
+
+          if [[ -n "${GH_TF_TEMPLATE_REPO}" ]]; then
+            echo "has_template_repo=true" >> "${GITHUB_OUTPUT}"
+            has_template_repo="true"
+          else
+            echo "has_template_repo=false" >> "${GITHUB_OUTPUT}"
+            has_template_repo="false"
+            echo "Template repo variable is missing. Validate/plan jobs will be skipped."
+          fi
+
+          [[ "${DEPLOY_DEV,,}" == "true" ]] && echo "has_deploy_dev=true" >> "${GITHUB_OUTPUT}" || echo "has_deploy_dev=false" >> "${GITHUB_OUTPUT}"
+          [[ "${DEPLOY_SANDBOX,,}" == "true" ]] && echo "has_deploy_sandbox=true" >> "${GITHUB_OUTPUT}" || echo "has_deploy_sandbox=false" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${DEPLOY_DEV,,}" == "true" || "${DEPLOY_SANDBOX,,}" == "true" ]]; then
+            echo "has_deploy_envs=true" >> "${GITHUB_OUTPUT}"
+            has_deploy_envs="true"
+          else
+            echo "has_deploy_envs=false" >> "${GITHUB_OUTPUT}"
+            has_deploy_envs="false"
+            echo "No deploy environment variables are enabled. Validate/plan jobs will be skipped."
+          fi
+
+          if [[ "${enable_github_apply}" == "true" && "${has_module_download_secret}" == "true" && "${has_template_repo}" == "true" && "${has_deploy_envs}" == "true" ]]; then
+            echo "has_apply_inputs=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_apply_inputs=false" >> "${GITHUB_OUTPUT}"
+            echo "Apply is disabled, required inputs are missing, or no deploy environments are enabled. Apply jobs will be skipped."
+          fi
+
+          [[ -n "${STAGE_REPOSITORY}" && -n "${STAGE_REPO_TOKEN}" ]] && echo "has_stage_publish_inputs=true" >> "${GITHUB_OUTPUT}" || echo "has_stage_publish_inputs=false" >> "${GITHUB_OUTPUT}"
+          [[ -n "${ADO_DEV_REPOSITORY}" && -n "${ADO_DEV_REPO_PAT}" ]] && echo "has_ado_dev_publish_inputs=true" >> "${GITHUB_OUTPUT}" || echo "has_ado_dev_publish_inputs=false" >> "${GITHUB_OUTPUT}"
+          [[ "${PUBLISH_ADO_SANDBOX,,}" == "true" && -n "${ADO_SANDBOX_REPOSITORY}" && -n "${ADO_SANDBOX_REPO_PAT}" ]] && echo "has_ado_sandbox_publish_inputs=true" >> "${GITHUB_OUTPUT}" || echo "has_ado_sandbox_publish_inputs=false" >> "${GITHUB_OUTPUT}"
+
+  plan_dev:
+    name: Validate and Plan (dev)
+    needs:
+      - validation-precheck
+    if: (needs.validation-precheck.outputs.is_stage_repository != 'true' || github.actor != 'github-actions[bot]') && needs.validation-precheck.outputs.has_module_download_secret == 'true' && needs.validation-precheck.outputs.has_template_repo == 'true' && needs.validation-precheck.outputs.has_deploy_dev == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: dev
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      DEPLOY_ENV: dev
+      TERRAFORM_ROOT: terraform
+      TERRAFORM_VAR_FILE: environments/dev/terraform.tfvars
+      TERRAFORM_BACKEND_FILE: environments/dev/backend.hcl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout template repo
+        shell: bash
+        env:
+          GH_TF_TEMPLATE_REPO: ${{ vars.GH_TF_TEMPLATE_REPO }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_TF_TEMPLATE_REPO}" ]]; then
+            echo "Missing required repository variable: GH_TF_TEMPLATE_REPO" >&2
+            exit 1
+          fi
+
+          rm -rf ../template
+          git clone --branch main --depth 1 "https://github.com/${GH_TF_TEMPLATE_REPO}.git" ../template
+
+      - name: Validate Azure credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+          [[ -n "${ARM_CLIENT_ID}" ]] || missing+=("ARM_CLIENT_ID")
+          [[ -n "${ARM_CLIENT_SECRET}" ]] || missing+=("ARM_CLIENT_SECRET")
+          [[ -n "${ARM_TENANT_ID}" ]] || missing+=("ARM_TENANT_ID")
+          [[ -n "${ARM_SUBSCRIPTION_ID}" ]] || missing+=("ARM_SUBSCRIPTION_ID")
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required GitHub Environment secret(s) for dev: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Configure Git auth for Terraform module downloads
+        shell: bash
+        env:
+          AZURE_ADO_PAT2: ${{ secrets.AZURE_ADO_PAT2 }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${AZURE_ADO_PAT2}" ]]; then
+            echo "Missing required secret: AZURE_ADO_PAT2" >&2
+            exit 1
+          fi
+
+          git config --global --unset-all http.https://dev.azure.com/.extraheader || true
+          git config --global --unset-all url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf || true
+          git config --global url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf "https://dev.azure.com/"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Prepare Terraform plugin cache
+        shell: bash
+        run: mkdir -p "${{ runner.temp }}/terraform-plugin-cache"
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/terraform-plugin-cache
+          key: terraform-providers-${{ runner.os }}-${{ hashFiles('terraform/.terraform.lock.hcl') }}
+          restore-keys: |
+            terraform-providers-${{ runner.os }}-
+
+      - name: Terraform Init
+        shell: bash
+        working-directory: terraform
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if terraform init -input=false -no-color -reconfigure -backend-config="${TERRAFORM_BACKEND_FILE}"; then
+              exit 0
+            fi
+
+            if [[ "${attempt}" -eq 8 ]]; then
+              echo "terraform init failed after ${attempt} attempts" >&2
+              exit 1
+            fi
+
+            rm -rf .terraform/providers
+            sleep_seconds=$((attempt * 30))
+            echo "terraform init failed; retrying in ${sleep_seconds}s..."
+            sleep "${sleep_seconds}"
+          done
+
+      - name: Terraform fmt check
+        shell: bash
+        working-directory: terraform
+        run: |
+          set -euo pipefail
+
+          if ! terraform fmt -check -recursive; then
+            echo "::warning::Terraform formatting drift detected. Running terraform fmt -recursive and continuing."
+            terraform fmt -recursive || echo "::warning::terraform fmt -recursive failed; continuing so terraform validate can report any real syntax issues."
+          fi
+
+      - name: Terraform validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform root harness test
+        if: hashFiles('terraform/tests/root-plan.tftest.hcl') != ''
+        working-directory: terraform
+        run: terraform test -filter=tests/root-plan.tftest.hcl -no-color
+
+      - name: Terraform plan
+        working-directory: terraform
+        run: terraform plan -input=false -no-color -var-file="${TERRAFORM_VAR_FILE}" -out=tfplan
+        env:
+          TF_VAR_environment: dev
+
+      - name: Terraform plan summary
+        shell: bash
+        working-directory: terraform
+        run: bash ../scripts/github/terraform-change-summary.sh tfplan "Terraform plan summary (dev)"
+
+      - name: Setup Infracost
+        if: needs.validation-precheck.outputs.has_infracost_api_key == 'true'
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Generate Infracost report
+        if: needs.validation-precheck.outputs.has_infracost_api_key == 'true'
+        shell: bash
+        working-directory: terraform
+        run: |
+          set -euo pipefail
+
+          terraform show -json tfplan > tfplan.json
+
+          infracost breakdown \
+            --path=tfplan.json \
+            --format=json \
+            --out-file=/tmp/infracost.json
+
+          infracost output \
+            --path=/tmp/infracost.json \
+            --format=github-comment \
+            --out-file=/tmp/infracost.md
+
+          infracost output \
+            --path=/tmp/infracost.json \
+            --format=table \
+            --show-skipped \
+            --out-file=/tmp/infracost.txt
+
+          {
+            echo "## Infracost report"
+            echo
+            echo '```text'
+            cat /tmp/infracost.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Comment Infracost on pull request
+        if: github.event_name == 'pull_request' && needs.validation-precheck.outputs.has_infracost_api_key == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          infracost comment github \
+            --path=/tmp/infracost.json \
+            --repo="${GITHUB_REPOSITORY}" \
+            --github-token="${{ github.token }}" \
+            --pull-request="${{ github.event.pull_request.number }}" \
+            --behavior=update
+
+      - name: Upload Infracost artifacts
+        if: needs.validation-precheck.outputs.has_infracost_api_key == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: infracost-report-dev-${{ github.run_id }}
+          path: |
+            /tmp/infracost.json
+            /tmp/infracost.md
+            /tmp/infracost.txt
+          if-no-files-found: error
+
+      - name: Upload plan artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-dev-${{ github.run_id }}
+          path: terraform/tfplan
+          if-no-files-found: error
+
+  plan_sandbox:
+    name: Validate and Plan (sandbox)
+    needs:
+      - validation-precheck
+    if: (needs.validation-precheck.outputs.is_stage_repository != 'true' || github.actor != 'github-actions[bot]') && needs.validation-precheck.outputs.has_module_download_secret == 'true' && needs.validation-precheck.outputs.has_template_repo == 'true' && needs.validation-precheck.outputs.has_deploy_sandbox == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: sandbox
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      DEPLOY_ENV: sandbox
+      TERRAFORM_ROOT: terraform
+      TERRAFORM_VAR_FILE: environments/sandbox/terraform.tfvars
+      TERRAFORM_BACKEND_FILE: environments/sandbox/backend.hcl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout template repo
+        shell: bash
+        env:
+          GH_TF_TEMPLATE_REPO: ${{ vars.GH_TF_TEMPLATE_REPO }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_TF_TEMPLATE_REPO}" ]]; then
+            echo "Missing required repository variable: GH_TF_TEMPLATE_REPO" >&2
+            exit 1
+          fi
+
+          rm -rf ../template
+          git clone --branch main --depth 1 "https://github.com/${GH_TF_TEMPLATE_REPO}.git" ../template
+
+      - name: Validate Azure credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+          [[ -n "${ARM_CLIENT_ID}" ]] || missing+=("ARM_CLIENT_ID")
+          [[ -n "${ARM_CLIENT_SECRET}" ]] || missing+=("ARM_CLIENT_SECRET")
+          [[ -n "${ARM_TENANT_ID}" ]] || missing+=("ARM_TENANT_ID")
+          [[ -n "${ARM_SUBSCRIPTION_ID}" ]] || missing+=("ARM_SUBSCRIPTION_ID")
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required GitHub Environment secret(s) for sandbox: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Configure Git auth for Terraform module downloads
+        shell: bash
+        env:
+          AZURE_ADO_PAT2: ${{ secrets.AZURE_ADO_PAT2 }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${AZURE_ADO_PAT2}" ]]; then
+            echo "Missing required secret: AZURE_ADO_PAT2" >&2
+            exit 1
+          fi
+
+          git config --global --unset-all http.https://dev.azure.com/.extraheader || true
+          git config --global --unset-all url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf || true
+          git config --global url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf "https://dev.azure.com/"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Prepare Terraform plugin cache
+        shell: bash
+        run: mkdir -p "${{ runner.temp }}/terraform-plugin-cache"
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/terraform-plugin-cache
+          key: terraform-providers-${{ runner.os }}-${{ hashFiles('terraform/.terraform.lock.hcl') }}
+          restore-keys: |
+            terraform-providers-${{ runner.os }}-
+
+      - name: Terraform Init
+        shell: bash
+        working-directory: terraform
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if terraform init -input=false -no-color -reconfigure -backend-config="${TERRAFORM_BACKEND_FILE}"; then
+              exit 0
+            fi
+
+            if [[ "${attempt}" -eq 8 ]]; then
+              echo "terraform init failed after ${attempt} attempts" >&2
+              exit 1
+            fi
+
+            rm -rf .terraform/providers
+            sleep_seconds=$((attempt * 30))
+            echo "terraform init failed; retrying in ${sleep_seconds}s..."
+            sleep "${sleep_seconds}"
+          done
+
+      - name: Terraform fmt check
+        shell: bash
+        working-directory: terraform
+        run: |
+          set -euo pipefail
+
+          if ! terraform fmt -check -recursive; then
+            echo "::warning::Terraform formatting drift detected. Running terraform fmt -recursive and continuing."
+            terraform fmt -recursive || echo "::warning::terraform fmt -recursive failed; continuing so terraform validate can report any real syntax issues."
+          fi
+
+      - name: Terraform validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform root harness test
+        if: hashFiles('terraform/tests/root-plan.tftest.hcl') != ''
+        working-directory: terraform
+        run: terraform test -filter=tests/root-plan.tftest.hcl -no-color
+
+      - name: Terraform plan
+        working-directory: terraform
+        run: terraform plan -input=false -no-color -var-file="${TERRAFORM_VAR_FILE}" -out=tfplan
+        env:
+          TF_VAR_environment: sandbox
+
+      - name: Terraform plan summary
+        shell: bash
+        working-directory: terraform
+        run: bash ../scripts/github/terraform-change-summary.sh tfplan "Terraform plan summary (sandbox)"
+
+      - name: Setup Infracost
+        if: needs.validation-precheck.outputs.has_infracost_api_key == 'true'
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Generate Infracost report
+        if: needs.validation-precheck.outputs.has_infracost_api_key == 'true'
+        shell: bash
+        working-directory: terraform
+        run: |
+          set -euo pipefail
+
+          terraform show -json tfplan > tfplan.json
+
+          infracost breakdown \
+            --path=tfplan.json \
+            --format=json \
+            --out-file=/tmp/infracost.json
+
+          infracost output \
+            --path=/tmp/infracost.json \
+            --format=github-comment \
+            --out-file=/tmp/infracost.md
+
+          infracost output \
+            --path=/tmp/infracost.json \
+            --format=table \
+            --show-skipped \
+            --out-file=/tmp/infracost.txt
+
+          {
+            echo "## Infracost report"
+            echo
+            echo '```text'
+            cat /tmp/infracost.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Comment Infracost on pull request
+        if: github.event_name == 'pull_request' && needs.validation-precheck.outputs.has_infracost_api_key == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          infracost comment github \
+            --path=/tmp/infracost.json \
+            --repo="${GITHUB_REPOSITORY}" \
+            --github-token="${{ github.token }}" \
+            --pull-request="${{ github.event.pull_request.number }}" \
+            --behavior=update
+
+      - name: Upload Infracost artifacts
+        if: needs.validation-precheck.outputs.has_infracost_api_key == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: infracost-report-sandbox-${{ github.run_id }}
+          path: |
+            /tmp/infracost.json
+            /tmp/infracost.md
+            /tmp/infracost.txt
+          if-no-files-found: error
+
+      - name: Upload plan artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-sandbox-${{ github.run_id }}
+          path: terraform/tfplan
+          if-no-files-found: error
+
+  apply_dev:
+    name: Apply Dev
+    if: github.event_name != 'pull_request' && needs.validation-precheck.outputs.has_apply_inputs == 'true' && needs.plan_dev.result == 'success'
+    needs:
+      - validation-precheck
+      - plan_dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: dev
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      DEPLOY_ENV: dev
+      TERRAFORM_BACKEND_FILE: environments/dev/backend.hcl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout template repo
+        shell: bash
+        env:
+          GH_TF_TEMPLATE_REPO: ${{ vars.GH_TF_TEMPLATE_REPO }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_TF_TEMPLATE_REPO}" ]]; then
+            echo "Missing required repository variable: GH_TF_TEMPLATE_REPO" >&2
+            exit 1
+          fi
+
+          rm -rf ../template
+          git clone --branch main --depth 1 "https://github.com/${GH_TF_TEMPLATE_REPO}.git" ../template
+
+      - name: Validate Azure credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+          [[ -n "${ARM_CLIENT_ID}" ]] || missing+=("ARM_CLIENT_ID")
+          [[ -n "${ARM_CLIENT_SECRET}" ]] || missing+=("ARM_CLIENT_SECRET")
+          [[ -n "${ARM_TENANT_ID}" ]] || missing+=("ARM_TENANT_ID")
+          [[ -n "${ARM_SUBSCRIPTION_ID}" ]] || missing+=("ARM_SUBSCRIPTION_ID")
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required GitHub Environment secret(s) for dev: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Configure Git auth for Terraform module downloads
+        shell: bash
+        env:
+          AZURE_ADO_PAT2: ${{ secrets.AZURE_ADO_PAT2 }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${AZURE_ADO_PAT2}" ]]; then
+            echo "Missing required secret: AZURE_ADO_PAT2" >&2
+            exit 1
+          fi
+
+          git config --global --unset-all http.https://dev.azure.com/.extraheader || true
+          git config --global --unset-all url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf || true
+          git config --global url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf "https://dev.azure.com/"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Prepare Terraform plugin cache
+        shell: bash
+        run: mkdir -p "${{ runner.temp }}/terraform-plugin-cache"
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/terraform-plugin-cache
+          key: terraform-providers-${{ runner.os }}-${{ hashFiles('terraform/.terraform.lock.hcl') }}
+          restore-keys: |
+            terraform-providers-${{ runner.os }}-
+
+      - name: Terraform Init
+        shell: bash
+        working-directory: terraform
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if terraform init -input=false -no-color -reconfigure -backend-config="${TERRAFORM_BACKEND_FILE}"; then
+              exit 0
+            fi
+
+            if [[ "${attempt}" -eq 8 ]]; then
+              echo "terraform init failed after ${attempt} attempts" >&2
+              exit 1
+            fi
+
+            rm -rf .terraform/providers
+            sleep_seconds=$((attempt * 30))
+            echo "terraform init failed; retrying in ${sleep_seconds}s..."
+            sleep "${sleep_seconds}"
+          done
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-dev-${{ github.run_id }}
+          path: terraform
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve -input=false -no-color tfplan
+        env:
+          TF_VAR_environment: dev
+
+      - name: Terraform apply summary
+        shell: bash
+        working-directory: terraform
+        run: bash ../scripts/github/terraform-change-summary.sh tfplan "Terraform apply summary (dev)"
+
+  apply_sandbox:
+    name: Apply Sandbox
+    if: github.event_name != 'pull_request' && needs.validation-precheck.outputs.has_apply_inputs == 'true' && needs.plan_sandbox.result == 'success'
+    needs:
+      - validation-precheck
+      - plan_sandbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: sandbox
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      DEPLOY_ENV: sandbox
+      TERRAFORM_BACKEND_FILE: environments/sandbox/backend.hcl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout template repo
+        shell: bash
+        env:
+          GH_TF_TEMPLATE_REPO: ${{ vars.GH_TF_TEMPLATE_REPO }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_TF_TEMPLATE_REPO}" ]]; then
+            echo "Missing required repository variable: GH_TF_TEMPLATE_REPO" >&2
+            exit 1
+          fi
+
+          rm -rf ../template
+          git clone --branch main --depth 1 "https://github.com/${GH_TF_TEMPLATE_REPO}.git" ../template
+
+      - name: Validate Azure credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+          [[ -n "${ARM_CLIENT_ID}" ]] || missing+=("ARM_CLIENT_ID")
+          [[ -n "${ARM_CLIENT_SECRET}" ]] || missing+=("ARM_CLIENT_SECRET")
+          [[ -n "${ARM_TENANT_ID}" ]] || missing+=("ARM_TENANT_ID")
+          [[ -n "${ARM_SUBSCRIPTION_ID}" ]] || missing+=("ARM_SUBSCRIPTION_ID")
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required GitHub Environment secret(s) for sandbox: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Configure Git auth for Terraform module downloads
+        shell: bash
+        env:
+          AZURE_ADO_PAT2: ${{ secrets.AZURE_ADO_PAT2 }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${AZURE_ADO_PAT2}" ]]; then
+            echo "Missing required secret: AZURE_ADO_PAT2" >&2
+            exit 1
+          fi
+
+          git config --global --unset-all http.https://dev.azure.com/.extraheader || true
+          git config --global --unset-all url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf || true
+          git config --global url."https://ado:${AZURE_ADO_PAT2}@dev.azure.com/".insteadOf "https://dev.azure.com/"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Prepare Terraform plugin cache
+        shell: bash
+        run: mkdir -p "${{ runner.temp }}/terraform-plugin-cache"
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/terraform-plugin-cache
+          key: terraform-providers-${{ runner.os }}-${{ hashFiles('terraform/.terraform.lock.hcl') }}
+          restore-keys: |
+            terraform-providers-${{ runner.os }}-
+
+      - name: Terraform Init
+        shell: bash
+        working-directory: terraform
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if terraform init -input=false -no-color -reconfigure -backend-config="${TERRAFORM_BACKEND_FILE}"; then
+              exit 0
+            fi
+
+            if [[ "${attempt}" -eq 8 ]]; then
+              echo "terraform init failed after ${attempt} attempts" >&2
+              exit 1
+            fi
+
+            rm -rf .terraform/providers
+            sleep_seconds=$((attempt * 30))
+            echo "terraform init failed; retrying in ${sleep_seconds}s..."
+            sleep "${sleep_seconds}"
+          done
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-sandbox-${{ github.run_id }}
+          path: terraform
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve -input=false -no-color tfplan
+        env:
+          TF_VAR_environment: sandbox
+
+      - name: Terraform apply summary
+        shell: bash
+        working-directory: terraform
+        run: bash ../scripts/github/terraform-change-summary.sh tfplan "Terraform apply summary (sandbox)"
+
+  create-git-tag:
+    name: Create Git Tag
+    if: github.event_name != 'pull_request' && needs.apply_dev.result == 'success'
+    needs:
+      - apply_dev
+    outputs:
+      release_tag: ${{ steps.semver.outputs.release_tag }}
+      release_notes: ${{ steps.semver.outputs.release_notes }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create canonical GitHub release tag
+        id: semver
+        env:
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          release_tag_file="$(mktemp)"
+          release_notes_file="$(mktemp)"
+
+          bash scripts/github/create-release-tag.sh \
+            --source-branch "${SOURCE_BRANCH}" \
+            --source-sha "${SOURCE_SHA}" \
+            --release-tag-file "${release_tag_file}" \
+            --release-notes-file "${release_notes_file}"
+
+          {
+            echo "release_tag=$(cat "${release_tag_file}")"
+            echo "release_notes<<EOF"
+            cat "${release_notes_file}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+  publish-stage-repo:
+    name: Publish Github Stage Repo
+    if: always() && github.event_name != 'pull_request' && needs.validation-precheck.outputs.is_stage_repository != 'true' && needs.validation-precheck.outputs.has_stage_publish_inputs == 'true' && needs.apply_dev.result == 'success' && (needs.create-git-tag.result == 'success' || needs.create-git-tag.result == 'skipped')
+    needs:
+      - validation-precheck
+      - apply_dev
+      - create-git-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Publish clean snapshot to stage repo
+        env:
+          STAGE_REPOSITORY: ${{ vars.STAGE_REPOSITORY }}
+          STAGE_REPO_TOKEN: ${{ secrets.STAGE_REPO_TOKEN }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.create-git-tag.outputs.release_tag }}
+          RELEASE_NOTES: ${{ needs.create-git-tag.outputs.release_notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${STAGE_REPO_TOKEN}" ]]; then
+            echo "Missing required secret: STAGE_REPO_TOKEN" >&2
+            exit 1
+          fi
+
+          if [[ -n "${STAGE_REPOSITORY}" ]]; then
+            target_repo="github.com/${STAGE_REPOSITORY%.git}"
+          else
+            echo "Missing required repository variable: STAGE_REPOSITORY" >&2
+            exit 1
+          fi
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "${workdir}"' EXIT
+
+          rsync -a \
+            --exclude='.git' \
+            "${GITHUB_WORKSPACE}/" "${workdir}/repo/"
+
+          cd "${workdir}/repo"
+
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${SOURCE_BRANCH}"
+          git add .
+          git commit -m "Stage snapshot from ${SOURCE_BRANCH}@${SOURCE_SHA}"
+
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            release_notes="${RELEASE_NOTES:-}"
+            if [[ -z "${release_notes}" ]]; then
+              release_notes="- ${SOURCE_SHA}"
+            fi
+
+            tag_message="$(mktemp)"
+            {
+              echo "Release ${RELEASE_TAG} snapshot"
+              echo
+              echo "Source: ${SOURCE_BRANCH}@${SOURCE_SHA}"
+              echo
+              echo "Changes:"
+              printf '%s\n' "${release_notes}"
+            } > "${tag_message}"
+
+            git tag -a "${RELEASE_TAG}" -F "${tag_message}"
+          fi
+
+          git remote add origin "https://x-access-token:${STAGE_REPO_TOKEN}@${target_repo}.git"
+          git push --force origin "${SOURCE_BRANCH}"
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+              echo "Stage repo already has tag ${RELEASE_TAG}; leaving it unchanged."
+            else
+              git push origin "refs/tags/${RELEASE_TAG}"
+            fi
+          fi
+
+  publish-ado-dev-repo:
+    name: Publish ADO Dev Repo
+    if: always() && github.event_name != 'pull_request' && needs.validation-precheck.outputs.is_stage_repository != 'true' && needs.validation-precheck.outputs.has_ado_dev_publish_inputs == 'true' && needs.apply_dev.result == 'success' && (needs.create-git-tag.result == 'success' || needs.create-git-tag.result == 'skipped')
+    needs:
+      - validation-precheck
+      - apply_dev
+      - create-git-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish Git history to Azure DevOps dev repo
+        env:
+          ADO_DEV_REPOSITORY: ${{ vars.ADO_DEV_REPOSITORY }}
+          ADO_DEV_REPO_PAT: ${{ secrets.ADO_DEV_REPO_PAT }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.create-git-tag.outputs.release_tag }}
+          RELEASE_NOTES: ${{ needs.create-git-tag.outputs.release_notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${ADO_DEV_REPO_PAT}" ]]; then
+            echo "Missing required secret: ADO_DEV_REPO_PAT" >&2
+            exit 1
+          fi
+
+          if [[ -n "${ADO_DEV_REPOSITORY}" ]]; then
+            target_repo="dev.azure.com/${ADO_DEV_REPOSITORY}"
+          else
+            echo "Missing required repository variable: ADO_DEV_REPOSITORY" >&2
+            exit 1
+          fi
+
+          cd "${GITHUB_WORKSPACE}"
+
+          remote_name="ado-dev"
+
+          git remote remove "${remote_name}" >/dev/null 2>&1 || true
+          git remote add "${remote_name}" "https://ado:${ADO_DEV_REPO_PAT}@${target_repo}"
+          git fetch "${remote_name}" --prune
+          git fetch --force --tags origin
+          git push --force "${remote_name}" "refs/heads/${SOURCE_BRANCH}:refs/heads/${SOURCE_BRANCH}"
+
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            origin_tag_ref="$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk '{print $1}')"
+            if [[ -z "${origin_tag_ref}" ]]; then
+              echo "GitHub tag ${RELEASE_TAG} was not found on origin." >&2
+              exit 1
+            fi
+
+            git tag -d "${RELEASE_TAG}" >/dev/null 2>&1 || true
+            git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            git push --force "${remote_name}" "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          fi
+
+  publish-ado-sandbox-repo:
+    name: Publish ADO Sandbox Repo
+    if: always() && github.event_name != 'pull_request' && needs.validation-precheck.outputs.is_stage_repository != 'true' && needs.validation-precheck.outputs.has_ado_sandbox_publish_inputs == 'true' && needs.apply_sandbox.result == 'success' && (needs.create-git-tag.result == 'success' || needs.create-git-tag.result == 'skipped')
+    needs:
+      - validation-precheck
+      - apply_sandbox
+      - create-git-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: sandbox
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish Git history to Azure DevOps sandbox repo
+        env:
+          ADO_SANDBOX_REPOSITORY: ${{ vars.ADO_SANDBOX_REPOSITORY }}
+          ADO_SANDBOX_REPO_PAT: ${{ secrets.ADO_SANDBOX_REPO_PAT }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.create-git-tag.outputs.release_tag }}
+          RELEASE_NOTES: ${{ needs.create-git-tag.outputs.release_notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${ADO_SANDBOX_REPO_PAT}" ]]; then
+            echo "Missing required secret: ADO_SANDBOX_REPO_PAT" >&2
+            exit 1
+          fi
+
+          if [[ -z "${ADO_SANDBOX_REPOSITORY}" ]]; then
+            echo "Missing required repository variable: ADO_SANDBOX_REPOSITORY" >&2
+            exit 1
+          fi
+
+          cd "${GITHUB_WORKSPACE}"
+
+          target_repo="dev.azure.com/${ADO_SANDBOX_REPOSITORY}"
+          remote_name="ado-sandbox"
+
+          git remote remove "${remote_name}" >/dev/null 2>&1 || true
+          git remote add "${remote_name}" "https://ado:${ADO_SANDBOX_REPO_PAT}@${target_repo}"
+          git fetch "${remote_name}" --prune
+          git fetch --force --tags origin
+          git push --force "${remote_name}" "refs/heads/${SOURCE_BRANCH}:refs/heads/${SOURCE_BRANCH}"
+
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            origin_tag_ref="$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk '{print $1}')"
+            if [[ -z "${origin_tag_ref}" ]]; then
+              echo "GitHub tag ${RELEASE_TAG} was not found on origin." >&2
+              exit 1
+            fi
+
+            git tag -d "${RELEASE_TAG}" >/dev/null 2>&1 || true
+            git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            git push --force "${remote_name}" "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          fi

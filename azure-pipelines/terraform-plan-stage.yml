@@ -1,0 +1,87 @@
+parameters:
+  - name: stageName
+    type: string
+  - name: displayName
+    type: string
+  - name: dependsOn
+    type: object
+  - name: condition
+    type: string
+  - name: environmentName
+    type: string
+  - name: azureSubscription
+    type: string
+
+stages:
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.displayName }}
+    dependsOn: ${{ parameters.dependsOn }}
+    condition: ${{ parameters.condition }}
+    variables:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      terraformVarFile: 'environments/${{ parameters.environmentName }}/terraform.tfvars'
+      terraformBackendFile: 'environments/${{ parameters.environmentName }}/backend.hcl'
+      planArtifactName: 'terraform-plan-${{ parameters.environmentName }}'
+      planTextArtifactName: 'terraform-plan-${{ parameters.environmentName }}-text'
+      planFilePath: '$(Build.ArtifactStagingDirectory)/${{ parameters.environmentName }}/terraform.tfplan'
+      planTextPath: '$(Build.ArtifactStagingDirectory)/${{ parameters.environmentName }}/terraform-plan.txt'
+    jobs:
+      - job: terraform_plan_${{ parameters.environmentName }}
+        displayName: Terraform Plan ${{ parameters.environmentName }}
+        steps:
+          - template: /templates/shared-runner-hygiene.yml
+            parameters:
+              configureTerraformCache: true
+              runPostJobCleanup: false
+
+          - checkout: self
+            clean: true
+            persistCredentials: false
+            path: s/enterprise-ai-chatbot
+          - checkout: templateRepo
+            clean: true
+            persistCredentials: false
+            path: s/template
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+              arguments: $(terraformVersion)
+              workingDirectory: $(selfRepoRoot)
+
+          - task: AzureCLI@2
+            displayName: Terraform plan ${{ parameters.environmentName }}
+            inputs:
+              azureSubscription: ${{ parameters.azureSubscription }}
+              scriptType: bash
+              scriptLocation: scriptPath
+              scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-plan.sh
+              arguments: >-
+                "$(terraformBackendFile)"
+                "$(terraformVarFile)"
+                "$(planFilePath)"
+                "$(planTextPath)"
+              workingDirectory: $(selfRepoRoot)/terraform
+              addSpnToEnvironment: true
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish ${{ parameters.environmentName }} plan artifact
+            inputs:
+              targetPath: $(planFilePath)
+              artifact: $(planArtifactName)
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish ${{ parameters.environmentName }} plan text
+            inputs:
+              targetPath: $(planTextPath)
+              artifact: $(planTextArtifactName)
+
+          - template: /templates/shared-runner-hygiene.yml
+            parameters:
+              runInitialization: false
+              runPreJobCleanup: false
+              runCachePrep: false
