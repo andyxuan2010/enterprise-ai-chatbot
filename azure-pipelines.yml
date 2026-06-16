@@ -1,0 +1,672 @@
+parameters:
+  - name: useEnvironmentApprovals
+    type: boolean
+    default: false
+  - name: deploymentEnvironmentName
+    type: string
+    default: '$(ENVIRONMENT)'
+
+name: $(Build.Repository.Name)
+
+resources:
+  repositories:
+    - repository: templateRepo
+      type: git
+      name: template
+      ref: refs/heads/main
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+      # - dev
+      # - sandbox
+      # - sbx
+
+pr: none
+
+pool:
+  name: '$(ADO_AGENT_POOL)'
+  vmImage: '$(ADO_AGENT_VM_IMAGE)'
+
+variables:
+  - name: TERRAFORM_VERSION
+    value: '1.10.5'
+
+  - group: azure-terraform
+  - group: iac-shared-vars
+  # Set ENABLE_ADO_TERRAFORM_APPLY and ENABLE_ADO_APP_DEPLOY as regular
+  # Azure DevOps pipeline variables, not variable-group values.
+
+  - name: selfRepoRoot
+    value: '$(Pipeline.Workspace)/s/enterprise-ai-chatbot'
+
+  - name: TERRAFORM_ROOT
+    value: '$(selfRepoRoot)/terraform'
+
+  - name: TERRAFORM_BACKEND_FILE
+    value: 'environments/$(ENVIRONMENT)/backend.hcl'
+
+  - name: TERRAFORM_VAR_FILE
+    value: 'environments/$(ENVIRONMENT)/terraform.tfvars'
+
+  - name: appPackageArtifactName
+    value: 'python-app-package'
+
+  - name: appPackagePath
+    value: '$(Build.ArtifactStagingDirectory)/app-package/app.zip'
+
+  - name: appPackageRoot
+    value: '$(Build.ArtifactStagingDirectory)/app-package/root'
+
+stages:
+  - stage: Validate
+    displayName: Common Validation
+    jobs:
+      - job: terraform_validate
+        displayName: Terraform Validate
+        steps:
+          - template: templates/shared-runner-hygiene.yml
+            parameters:
+              configureTerraformCache: true
+              runPostJobCleanup: false
+
+          - checkout: self
+            clean: true
+            persistCredentials: false
+            path: s/enterprise-ai-chatbot
+
+          - checkout: templateRepo
+            clean: true
+            persistCredentials: false
+            path: s/template
+
+          - task: Bash@3
+            displayName: Show pipeline environment
+            inputs:
+              targetType: inline
+              workingDirectory: $(selfRepoRoot)
+              script: |
+                set -euo pipefail
+
+                for var_name in \
+                  ADO_AGENT_POOL \
+                  ADO_AGENT_VM_IMAGE \
+                  ENVIRONMENT \
+                  AZURE_SERVICE_CONNECTION \
+                  TERRAFORM_VERSION \
+                  TERRAFORM_ROOT \
+                  TERRAFORM_VAR_FILE \
+                  TERRAFORM_BACKEND_FILE \
+                  ADO_PACKAGE_PYTHON_VERSION; do
+                  value="${!var_name:-}"
+                  if [[ -z "${value}" || "${value}" == \$\(* ]]; then
+                    echo "Missing required Azure DevOps variable: ${var_name}" >&2
+                    exit 1
+                  fi
+                done
+
+                for required_file in \
+                  "${TERRAFORM_ROOT}/${TERRAFORM_BACKEND_FILE}" \
+                  "${TERRAFORM_ROOT}/${TERRAFORM_VAR_FILE}"; do
+                  if [[ ! -f "${required_file}" ]]; then
+                    echo "Required pipeline input file not found: ${required_file}" >&2
+                    exit 1
+                  fi
+                done
+
+                echo "Repository root: $(selfRepoRoot)"
+                echo "Terraform root: ${TERRAFORM_ROOT}"
+                echo "Agent pool: ${ADO_AGENT_POOL}"
+                echo "Agent VM image: ${ADO_AGENT_VM_IMAGE}"
+                echo "Environment: ${ENVIRONMENT}"
+                echo "Azure service connection: ${AZURE_SERVICE_CONNECTION}"
+                echo "Terraform version: ${TERRAFORM_VERSION}"
+                echo "ADO package Python version: ${ADO_PACKAGE_PYTHON_VERSION}"
+                echo "Terraform backend file: ${TERRAFORM_BACKEND_FILE}"
+                echo "Terraform var file: ${TERRAFORM_VAR_FILE}"
+                echo "Enable ADO Terraform apply: ${ENABLE_ADO_TERRAFORM_APPLY:-false}"
+                echo "Enable ADO app deploy: ${ENABLE_ADO_APP_DEPLOY:-false}"
+            env:
+              ADO_AGENT_POOL: $(ADO_AGENT_POOL)
+              ADO_AGENT_VM_IMAGE: $(ADO_AGENT_VM_IMAGE)
+              TERRAFORM_VERSION: $(TERRAFORM_VERSION)
+              TERRAFORM_ROOT: $(TERRAFORM_ROOT)
+              ENVIRONMENT: $(ENVIRONMENT)
+              AZURE_SERVICE_CONNECTION: $(AZURE_SERVICE_CONNECTION)
+              TERRAFORM_VAR_FILE: $(TERRAFORM_VAR_FILE)
+              TERRAFORM_BACKEND_FILE: $(TERRAFORM_BACKEND_FILE)
+              ENABLE_ADO_TERRAFORM_APPLY: $(ENABLE_ADO_TERRAFORM_APPLY)
+              ENABLE_ADO_APP_DEPLOY: $(ENABLE_ADO_APP_DEPLOY)
+              ADO_PACKAGE_PYTHON_VERSION: $(ADO_PACKAGE_PYTHON_VERSION)
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+              arguments: $(TERRAFORM_VERSION)
+              workingDirectory: $(selfRepoRoot)
+
+          - task: Bash@3
+            displayName: Terraform fmt and validate
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-validate.sh
+              workingDirectory: $(TERRAFORM_ROOT)
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              APP_SERVICE_CUSTOM_HOSTNAME: $(app_service_custom_hostname)
+              APP_SERVICE_CUSTOM_HOSTNAME_SSL_STATE: $(app_service_custom_hostname_ssl_state)
+
+          - template: templates/shared-runner-hygiene.yml
+            parameters:
+              runInitialization: false
+              runPreJobCleanup: false
+              runCachePrep: false
+
+  - stage: BuildApp
+    displayName: Build App Package
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: build_app_package
+        displayName: Build Python app package
+        steps:
+          - template: templates/shared-runner-hygiene.yml
+            parameters:
+              configurePythonCache: true
+              runPostJobCleanup: false
+
+          - checkout: self
+            clean: true
+            persistCredentials: false
+            path: s/enterprise-ai-chatbot
+
+          - task: UsePythonVersion@0
+            displayName: Use Python $(ADO_PACKAGE_PYTHON_VERSION)
+            inputs:
+              versionSpec: '$(ADO_PACKAGE_PYTHON_VERSION)'
+
+          - task: Bash@3
+            displayName: Stage app files
+            inputs:
+              targetType: inline
+              workingDirectory: $(selfRepoRoot)
+              script: |
+                set -euo pipefail
+
+                PYTHON_BIN="$(command -v python3 || command -v python || true)"
+                if [[ -z "${PYTHON_BIN}" ]]; then
+                  echo "Python interpreter not found. Install python3 or configure ADO_PACKAGE_PYTHON_VERSION." >&2
+                  exit 1
+                fi
+
+                package_root="$(appPackageRoot)"
+
+                rm -rf "${package_root}"
+                mkdir -p "${package_root}/app/api"
+
+                cp requirements.txt "${package_root}/requirements.txt"
+                cp startup.sh "${package_root}/startup.sh"
+
+                rsync -a \
+                  --exclude='.venv/' \
+                  --exclude='.venv311/' \
+                  --exclude='__pycache__/' \
+                  app/api/ "${package_root}/app/api/"
+
+          - task: Bash@3
+            displayName: Archive app package
+            inputs:
+              targetType: inline
+              workingDirectory: $(selfRepoRoot)
+              script: |
+                set -euo pipefail
+
+                PYTHON_BIN="$(command -v python3 || command -v python || true)"
+                if [[ -z "${PYTHON_BIN}" ]]; then
+                  echo "Python interpreter not found. Install python3 or configure ADO_PACKAGE_PYTHON_VERSION." >&2
+                  exit 1
+                fi
+
+                "${PYTHON_BIN}" - <<'PY'
+                from pathlib import Path
+                from zipfile import ZIP_DEFLATED, ZipFile
+
+                source_dir = Path(r"$(appPackageRoot)")
+                archive_path = Path(r"$(appPackagePath)")
+                archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+                if archive_path.exists():
+                    archive_path.unlink()
+
+                with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as zf:
+                    for path in sorted(source_dir.rglob("*")):
+                        if path.is_file():
+                            zf.write(path, path.relative_to(source_dir))
+                PY
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish app package artifact
+            inputs:
+              targetPath: $(appPackagePath)
+              artifact: $(appPackageArtifactName)
+
+          - template: templates/shared-runner-hygiene.yml
+            parameters:
+              runInitialization: false
+              runPreJobCleanup: false
+              runCachePrep: false
+
+  - stage: Plan
+    displayName: Terraform Plan ($(ENVIRONMENT))
+    dependsOn: Validate
+    condition: succeeded()
+    variables:
+      planArtifactName: 'terraform-plan-$(ENVIRONMENT)'
+      planTextArtifactName: 'terraform-plan-$(ENVIRONMENT)-text'
+      planFilePath: '$(Build.ArtifactStagingDirectory)/$(ENVIRONMENT)/terraform.tfplan'
+      planTextPath: '$(Build.ArtifactStagingDirectory)/$(ENVIRONMENT)/terraform-plan.txt'
+    jobs:
+      - job: terraform_plan
+        displayName: Terraform Plan ($(ENVIRONMENT))
+        steps:
+          - template: templates/shared-runner-hygiene.yml
+            parameters:
+              configureTerraformCache: true
+              runPostJobCleanup: false
+
+          - checkout: self
+            clean: true
+            persistCredentials: false
+            path: s/enterprise-ai-chatbot
+
+          - checkout: templateRepo
+            clean: true
+            persistCredentials: false
+            path: s/template
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+              arguments: $(TERRAFORM_VERSION)
+              workingDirectory: $(selfRepoRoot)
+
+          - task: Bash@3
+            displayName: Read Terraform backend config
+            inputs:
+              targetType: filePath
+              filePath: $(selfRepoRoot)/scripts/azure-pipelines/read-backend-config.sh
+              arguments: $(TERRAFORM_BACKEND_FILE)
+              workingDirectory: $(TERRAFORM_ROOT)
+
+          - task: AzureCLI@2
+            displayName: Terraform plan ($(ENVIRONMENT))
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              scriptType: bash
+              scriptLocation: scriptPath
+              scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-plan.sh
+              arguments: >-
+                "$(backendSubscriptionId)"
+                "$(backendTenantId)"
+                "$(backendResourceGroupName)"
+                "$(backendStorageAccountName)"
+                "$(backendContainerName)"
+                "$(backendKey)"
+                "$(TERRAFORM_VAR_FILE)"
+                "$(planFilePath)"
+                "$(planTextPath)"
+              workingDirectory: $(TERRAFORM_ROOT)
+              addSpnToEnvironment: true
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              APP_SERVICE_CUSTOM_HOSTNAME: $(app_service_custom_hostname)
+              APP_SERVICE_CUSTOM_HOSTNAME_SSL_STATE: $(app_service_custom_hostname_ssl_state)
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish plan artifact
+            inputs:
+              targetPath: $(planFilePath)
+              artifact: $(planArtifactName)
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish plan text
+            inputs:
+              targetPath: $(planTextPath)
+              artifact: $(planTextArtifactName)
+
+          - template: templates/shared-runner-hygiene.yml
+            parameters:
+              runInitialization: false
+              runPreJobCleanup: false
+              runCachePrep: false
+
+  - stage: Apply
+    displayName: Terraform Apply ($(ENVIRONMENT))
+    dependsOn: Plan
+    condition: and(succeeded(), in(variables['ENABLE_ADO_TERRAFORM_APPLY'], 'true', 'True', 'TRUE'))
+    variables:
+      planArtifactName: 'terraform-plan-$(ENVIRONMENT)'
+      downloadedPlanPath: '$(Pipeline.Workspace)/terraform-plan-$(ENVIRONMENT)/terraform.tfplan'
+    jobs:
+      - ${{ if eq(parameters.useEnvironmentApprovals, true) }}:
+          - deployment: terraform_apply
+            displayName: Terraform Apply ($(ENVIRONMENT))
+            environment: ${{ parameters.deploymentEnvironmentName }}
+            strategy:
+              runOnce:
+                deploy:
+                  steps:
+                    - template: templates/shared-runner-hygiene.yml
+                      parameters:
+                        configureTerraformCache: true
+                        runPostJobCleanup: false
+
+                    - checkout: self
+                      clean: true
+                      persistCredentials: false
+                      path: s/enterprise-ai-chatbot
+
+                    - checkout: templateRepo
+                      clean: true
+                      persistCredentials: false
+                      path: s/template
+
+                    - task: Bash@3
+                      displayName: Install Terraform
+                      inputs:
+                        targetType: filePath
+                        filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+                        arguments: $(TERRAFORM_VERSION)
+                        workingDirectory: $(selfRepoRoot)
+
+                    - task: Bash@3
+                      displayName: Read Terraform backend config
+                      inputs:
+                        targetType: filePath
+                        filePath: $(selfRepoRoot)/scripts/azure-pipelines/read-backend-config.sh
+                        arguments: $(TERRAFORM_BACKEND_FILE)
+                        workingDirectory: $(TERRAFORM_ROOT)
+
+                    - task: DownloadPipelineArtifact@2
+                      displayName: Download plan artifact
+                      inputs:
+                        buildType: current
+                        artifactName: $(planArtifactName)
+                        targetPath: $(Pipeline.Workspace)/$(planArtifactName)
+
+                    - task: AzureCLI@2
+                      displayName: Terraform apply ($(ENVIRONMENT))
+                      inputs:
+                        azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+                        scriptType: bash
+                        scriptLocation: scriptPath
+                        scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-apply.sh
+                        arguments: >-
+                          "$(backendSubscriptionId)"
+                          "$(backendTenantId)"
+                          "$(backendResourceGroupName)"
+                          "$(backendStorageAccountName)"
+                          "$(backendContainerName)"
+                          "$(backendKey)"
+                          "$(downloadedPlanPath)"
+                        workingDirectory: $(TERRAFORM_ROOT)
+                        addSpnToEnvironment: true
+                      env:
+                        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+                        APP_SERVICE_CUSTOM_HOSTNAME: $(app_service_custom_hostname)
+                        APP_SERVICE_CUSTOM_HOSTNAME_SSL_STATE: $(app_service_custom_hostname_ssl_state)
+
+                    - template: templates/shared-runner-hygiene.yml
+                      parameters:
+                        runInitialization: false
+                        runPreJobCleanup: false
+                        runCachePrep: false
+
+      - ${{ if ne(parameters.useEnvironmentApprovals, true) }}:
+          - job: terraform_apply
+            displayName: Terraform Apply ($(ENVIRONMENT))
+            steps:
+              - template: templates/shared-runner-hygiene.yml
+                parameters:
+                  configureTerraformCache: true
+                  runPostJobCleanup: false
+
+              - checkout: self
+                clean: true
+                persistCredentials: false
+                path: s/enterprise-ai-chatbot
+
+              - checkout: templateRepo
+                clean: true
+                persistCredentials: false
+                path: s/template
+
+              - task: Bash@3
+                displayName: Install Terraform
+                inputs:
+                  targetType: filePath
+                  filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+                  arguments: $(TERRAFORM_VERSION)
+                  workingDirectory: $(selfRepoRoot)
+
+              - task: Bash@3
+                displayName: Read Terraform backend config
+                inputs:
+                  targetType: filePath
+                  filePath: $(selfRepoRoot)/scripts/azure-pipelines/read-backend-config.sh
+                  arguments: $(TERRAFORM_BACKEND_FILE)
+                  workingDirectory: $(TERRAFORM_ROOT)
+
+              - task: DownloadPipelineArtifact@2
+                displayName: Download plan artifact
+                inputs:
+                  buildType: current
+                  artifactName: $(planArtifactName)
+                  targetPath: $(Pipeline.Workspace)/$(planArtifactName)
+
+              - task: AzureCLI@2
+                displayName: Terraform apply ($(ENVIRONMENT))
+                inputs:
+                  azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+                  scriptType: bash
+                  scriptLocation: scriptPath
+                  scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-apply.sh
+                  arguments: >-
+                    "$(backendSubscriptionId)"
+                    "$(backendTenantId)"
+                    "$(backendResourceGroupName)"
+                    "$(backendStorageAccountName)"
+                    "$(backendContainerName)"
+                    "$(backendKey)"
+                    "$(downloadedPlanPath)"
+                  workingDirectory: $(TERRAFORM_ROOT)
+                  addSpnToEnvironment: true
+                env:
+                  SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+                  APP_SERVICE_CUSTOM_HOSTNAME: $(app_service_custom_hostname)
+                  APP_SERVICE_CUSTOM_HOSTNAME_SSL_STATE: $(app_service_custom_hostname_ssl_state)
+
+              - template: templates/shared-runner-hygiene.yml
+                parameters:
+                  runInitialization: false
+                  runPreJobCleanup: false
+                  runCachePrep: false
+
+  - stage: DeployApp
+    displayName: Deploy App ($(ENVIRONMENT))
+    dependsOn:
+      - BuildApp
+      - Apply
+    condition: and(succeeded(), in(variables['ENABLE_ADO_APP_DEPLOY'], 'true', 'True', 'TRUE'))
+    jobs:
+      - job: deploy_app_package
+        displayName: Deploy App Package ($(ENVIRONMENT))
+        variables:
+          appPackageDownloadPath: '$(Pipeline.Workspace)/$(appPackageArtifactName)'
+        steps:
+          - template: templates/shared-runner-hygiene.yml
+            parameters:
+              runPostJobCleanup: false
+
+          - checkout: self
+            clean: true
+            persistCredentials: false
+            path: s/enterprise-ai-chatbot
+
+          - task: AzureCLI@2
+            displayName: Resolve deployment target
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: $(selfRepoRoot)
+              inlineScript: |
+                set -euo pipefail
+
+                tfvars_path="$(TERRAFORM_ROOT)/$(TERRAFORM_VAR_FILE)"
+                PYTHON_BIN="$(command -v python3 || command -v python || true)"
+                if [[ -z "${PYTHON_BIN}" ]]; then
+                  echo "Python interpreter not found. Install python3 or configure ADO_PACKAGE_PYTHON_VERSION." >&2
+                  exit 1
+                fi
+
+                "${PYTHON_BIN}" - "$tfvars_path" <<'PY'
+                import re
+                import sys
+                from pathlib import Path
+
+                path = Path(sys.argv[1])
+                text = path.read_text()
+
+                def read_string(name: str, default: str = "") -> str:
+                    match = re.search(rf'^\s*{re.escape(name)}\s*=\s*"([^"]*)"', text, re.MULTILINE)
+                    return match.group(1) if match else default
+
+                def read_bool(name: str, default: bool) -> bool:
+                    match = re.search(rf'^\s*{re.escape(name)}\s*=\s*(true|false)\b', text, re.MULTILINE | re.IGNORECASE)
+                    return match.group(1).lower() == "true" if match else default
+
+                workload = read_string("workload", "chatbot")
+                environment = read_string("environment", "").strip().lower() or "dev"
+                enable_app_service_stack = read_bool("enable_app_service_stack", True)
+                app_service_name = read_string("app_service_name").strip()
+                resource_group_name = read_string("resource_group_name").strip()
+                landingzone_resource_group_name = read_string("landingzone_resource_group_name").strip()
+                enable_scm_basic_auth = read_bool("app_service_scm_basic_auth_publishing_credentials_enabled", False)
+
+                if not enable_app_service_stack:
+                    print("##vso[task.logissue type=warning]App Service stack is disabled in tfvars. Skipping web deployment.")
+                    print("##vso[task.setvariable variable=skipWebDeploy]true")
+                    raise SystemExit(0)
+
+                if not app_service_name:
+                    workload_slug = workload.replace("_", "-").lower()
+                    app_service_name = f"web-{workload_slug}-{environment}"
+
+                if not resource_group_name:
+                    resource_group_name = landingzone_resource_group_name
+
+                if not resource_group_name:
+                    raise SystemExit("Unable to resolve resource_group_name from tfvars.")
+
+                print("##vso[task.setvariable variable=skipWebDeploy]false")
+                print(f"##vso[task.setvariable variable=resolvedAppServiceName]{app_service_name}")
+                print(f"##vso[task.setvariable variable=resolvedResourceGroup]{resource_group_name}")
+                print(f"##vso[task.setvariable variable=enableScmBasicAuth]{str(enable_scm_basic_auth).lower()}")
+                PY
+
+          - task: DownloadPipelineArtifact@2
+            displayName: Download app package artifact
+            condition: ne(variables['skipWebDeploy'], 'true')
+            inputs:
+              buildType: current
+              artifactName: $(appPackageArtifactName)
+              targetPath: $(appPackageDownloadPath)
+
+          - task: AzureCLI@2
+            displayName: Deploy web package
+            condition: ne(variables['skipWebDeploy'], 'true')
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: $(selfRepoRoot)
+              inlineScript: |
+                set -euo pipefail
+
+                app_name="$(resolvedAppServiceName)"
+                resource_group="$(resolvedResourceGroup)"
+                package_path="$(appPackageDownloadPath)/app.zip"
+                enable_scm_basic_auth="$(enableScmBasicAuth)"
+
+                if [[ ! -f "${package_path}" ]]; then
+                  echo "Application package not found: ${package_path}" >&2
+                  exit 1
+                fi
+
+                restore_scm_basic_auth="false"
+                if [[ "${enable_scm_basic_auth,,}" == "true" ]]; then
+                  current_scm_basic_auth="$(az resource show \
+                    --resource-group "${resource_group}" \
+                    --resource-type Microsoft.Web/sites/basicPublishingCredentialsPolicies \
+                    --namespace Microsoft.Web \
+                    --parent "sites/${app_name}" \
+                    --name scm \
+                    --query properties.allow \
+                    -o tsv 2>/dev/null || true)"
+
+                  if [[ "${current_scm_basic_auth,,}" != "true" ]]; then
+                    restore_scm_basic_auth="true"
+                    az resource update \
+                      --resource-group "${resource_group}" \
+                      --resource-type Microsoft.Web/sites/basicPublishingCredentialsPolicies \
+                      --namespace Microsoft.Web \
+                      --parent "sites/${app_name}" \
+                      --name scm \
+                      --set properties.allow=true \
+                      >/dev/null
+                  fi
+                fi
+
+                az webapp config appsettings delete \
+                  --resource-group "${resource_group}" \
+                  --name "${app_name}" \
+                  --setting-names WEBSITE_RUN_FROM_PACKAGE || true
+
+                az webapp config appsettings set \
+                  --resource-group "${resource_group}" \
+                  --name "${app_name}" \
+                  --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true ENABLE_ORYX_BUILD=true
+
+                az webapp deploy \
+                  --resource-group "${resource_group}" \
+                  --name "${app_name}" \
+                  --src-path "${package_path}" \
+                  --type zip \
+                  --async true \
+                  --enriched-errors true \
+                  --restart true \
+                  --track-status false
+
+                if [[ "${restore_scm_basic_auth}" == "true" ]]; then
+                  az resource update \
+                    --resource-group "${resource_group}" \
+                    --resource-type Microsoft.Web/sites/basicPublishingCredentialsPolicies \
+                    --namespace Microsoft.Web \
+                    --parent "sites/${app_name}" \
+                    --name scm \
+                    --set properties.allow=false \
+                    >/dev/null
+                fi
+
+          - template: templates/shared-runner-hygiene.yml
+            parameters:
+              runInitialization: false
+              runPreJobCleanup: false
+              runCachePrep: false
