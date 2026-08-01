@@ -1,0 +1,47 @@
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "eastus"
+workload        = "chatbot"
+environment     = "prod"
+features = {
+  enable_app_service_stack               = true
+  enable_app_registration_for_appservice = true
+  enable_openai                          = false
+  enable_azure_ai_service                = false
+  enable_azure_ai_search                 = false
+  create_azure_search_query_key          = false
+}
+resource_group_name   = "rg-enterprise-ai-chatbot-prod"
+app_service_plan_name = "asp-enterprise-ai-chatbot-prod"
+app_service_name      = "web-enterprise-ai-chatbot-prod"
+# Set APP_SERVICE_CUSTOM_HOSTNAME in Azure DevOps, or TF_VAR_app_service_custom_hostname in Bash/PowerShell, to bind a custom domain.
+# Create CNAME <custom-hostname> -> app-enterprise-ai-chatbot-prod.azurewebsites.net before enabling the binding.
+app_registration_display_name        = "appreg-enterprise-ai-chatbot-prod"
+app_service_python_version           = "3.12"
+app_service_enable_auth              = false
+landingzone_resource_group_name      = "TODO-rg-platform-prod"
+landingzone_ai_resource_group_name   = "TODO-rg-platform-prod"
+landingzone_storage_account_name     = "TODO-storage-account-name"
+landingzone_key_vault_name           = "TODO-key-vault-name"
+landingzone_openai_name              = "TODO-openai-name"
+landingzone_openai_enabled           = false
+landingzone_azure_ai_service_name    = "TODO-azure-ai-service-name"
+landingzone_azure_ai_service_enabled = false
+landingzone_azure_ai_search_name     = "TODO-azure-ai-search-name"
+landingzone_azure_ai_search_enabled  = false
+landingzone_log_analytics_name       = "TODO-log-analytics-name"
+
+rg_tags = {
+  "Application Name"                  = "CCOE INFRA IAC"
+  "Application Owner"                 = "CCOE"
+  "AppSupport Team"                   = "CCOE"
+  "Approval Group"                    = "CCOE"
+  "Business Owner"                    = "CCOE"
+  "Environment"                       = "Prod"
+  "Infra Availability Classification" = "Bronze"
+  "InfraSupport Team"                 = "CCOE"
+  "Maintenance Window"                = "CCOE"
+  "Project Name"                      = "CCOE INFRA IAC"
+  "Project Number"                    = "N/A"
+  "RPO-RTO"                           = "48H/24H"
+  "Run Cost(Approved Run Budget)-USD" = "100"
+}
