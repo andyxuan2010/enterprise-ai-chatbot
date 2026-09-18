@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{DESCRIPTION}}">
+  <meta name="color-scheme" content="light dark">
+  <title>{{PAGE_TITLE}} · {{SITE_TITLE}}</title>
+  <link rel="stylesheet" href="{{ROOT_PREFIX}}styles.css?v={{ASSET_VERSION}}">
+</head>
+<body>
+  <header class="topbar">
+    <nav class="global-nav" aria-label="Primary">
+      <a href="https://andyxuan.ca/">Home</a>
+      <a href="https://andyxuan.ca/docs/">▤ Library</a>
+      <a href="{{GITHUB_URL}}" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+    <a class="brand" href="{{ROOT_PREFIX}}index.html" aria-label="Documentation home">
+      <span class="brand-mark" aria-hidden="true">AI</span>
+      <span class="brand-text">{{SITE_TITLE}} <small>CCOE enterprise AI documentation</small></span>
+    </a>
+    <div class="header-tools">
+      <div class="language-switch" aria-label="Language selection"><span class="active" aria-current="true">EN</span><span aria-disabled="true">FR</span><span aria-disabled="true">中</span></div>
+      <button class="icon-button" id="themeButton" type="button" aria-label="Toggle dark mode" title="Toggle color theme">◐</button>
+    </div>
+  </header>
+  {{CONTENT}}
+  <script src="{{ROOT_PREFIX}}site.js?v={{ASSET_VERSION}}" defer></script>
+</body>
+</html>

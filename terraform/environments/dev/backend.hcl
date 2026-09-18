@@ -1,0 +1,6 @@
+subscription_id      = "1ec5edd4-5654-4246-8027-b29ef63b3393"
+tenant_id            = "d5b038fb-4b39-41cc-8a10-fba75212180b"
+resource_group_name  = "rg-ccoe-iac-cc-dev"
+storage_account_name = "stccoeiacccdev"
+container_name       = "terraform"
+key                  = "enterprise-ai-chatbot/terraform.tfstate"

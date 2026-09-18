@@ -1,0 +1,6 @@
+{
+  "title": "Enterprise AI Chatbot",
+  "description": "Architecture and operational guidance for the enterprise AI document-grounded chatbot on Azure.",
+  "eyebrow": "Enterprise AI · grounded retrieval on Azure",
+  "repository": "https://github.com/CCOE-Azure/enterprise-ai-chatbot"
+}

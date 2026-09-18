@@ -1,0 +1,142 @@
+parameters:
+  - name: stageName
+    type: string
+  - name: displayName
+    type: string
+  - name: dependsOn
+    type: object
+  - name: condition
+    type: string
+  - name: environmentName
+    type: string
+  - name: adoEnvironmentName
+    type: string
+  - name: azureSubscription
+    type: string
+  - name: useEnvironmentApprovals
+    type: boolean
+
+stages:
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.displayName }}
+    dependsOn: ${{ parameters.dependsOn }}
+    condition: ${{ parameters.condition }}
+    variables:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      terraformBackendFile: 'environments/${{ parameters.environmentName }}/backend.hcl'
+      downloadedPlanPath: '$(Pipeline.Workspace)/terraform-plan-${{ parameters.environmentName }}/terraform.tfplan'
+    jobs:
+      - ${{ if eq(parameters.useEnvironmentApprovals, true) }}:
+        - deployment: terraform_apply_${{ parameters.environmentName }}
+          displayName: Terraform Apply ${{ parameters.environmentName }}
+          environment: ${{ parameters.adoEnvironmentName }}
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - template: /templates/shared-runner-hygiene.yml
+                    parameters:
+                      configureTerraformCache: true
+                      runPostJobCleanup: false
+
+                  - checkout: self
+                    clean: true
+                    persistCredentials: false
+                    path: s/enterprise-ai-chatbot
+                  - checkout: templateRepo
+                    clean: true
+                    persistCredentials: false
+                    path: s/template
+
+                  - task: Bash@3
+                    displayName: Install Terraform
+                    inputs:
+                      targetType: filePath
+                      filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+                      arguments: $(terraformVersion)
+                      workingDirectory: $(selfRepoRoot)
+
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download ${{ parameters.environmentName }} plan artifact
+                    inputs:
+                      buildType: current
+                      artifactName: terraform-plan-${{ parameters.environmentName }}
+                      targetPath: $(Pipeline.Workspace)/terraform-plan-${{ parameters.environmentName }}
+
+                  - task: AzureCLI@2
+                    displayName: Terraform apply ${{ parameters.environmentName }}
+                    inputs:
+                      azureSubscription: ${{ parameters.azureSubscription }}
+                      scriptType: bash
+                      scriptLocation: scriptPath
+                      scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-apply.sh
+                      arguments: >-
+                        "$(terraformBackendFile)"
+                        "$(downloadedPlanPath)"
+                      workingDirectory: $(selfRepoRoot)/terraform
+                      addSpnToEnvironment: true
+                    env:
+                      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+                      APP_SERVICE_CUSTOM_HOSTNAME: $(app_service_custom_hostname)
+                      APP_SERVICE_CUSTOM_HOSTNAME_SSL_STATE: $(app_service_custom_hostname_ssl_state)
+
+                  - template: /templates/shared-runner-hygiene.yml
+                    parameters:
+                      runInitialization: false
+                      runPreJobCleanup: false
+                      runCachePrep: false
+      - ${{ if ne(parameters.useEnvironmentApprovals, true) }}:
+        - job: terraform_apply_${{ parameters.environmentName }}
+          displayName: Terraform Apply ${{ parameters.environmentName }}
+          steps:
+            - template: /templates/shared-runner-hygiene.yml
+              parameters:
+                configureTerraformCache: true
+                runPostJobCleanup: false
+
+            - checkout: self
+              clean: true
+              persistCredentials: false
+              path: s/enterprise-ai-chatbot
+            - checkout: templateRepo
+              clean: true
+              persistCredentials: false
+              path: s/template
+
+            - task: Bash@3
+              displayName: Install Terraform
+              inputs:
+                targetType: filePath
+                filePath: $(selfRepoRoot)/scripts/azure-pipelines/install-terraform.sh
+                arguments: $(terraformVersion)
+                workingDirectory: $(selfRepoRoot)
+
+            - task: DownloadPipelineArtifact@2
+              displayName: Download ${{ parameters.environmentName }} plan artifact
+              inputs:
+                buildType: current
+                artifactName: terraform-plan-${{ parameters.environmentName }}
+                targetPath: $(Pipeline.Workspace)/terraform-plan-${{ parameters.environmentName }}
+
+            - task: AzureCLI@2
+              displayName: Terraform apply ${{ parameters.environmentName }}
+              inputs:
+                azureSubscription: ${{ parameters.azureSubscription }}
+                scriptType: bash
+                scriptLocation: scriptPath
+                scriptPath: $(selfRepoRoot)/scripts/azure-pipelines/terraform-apply.sh
+                arguments: >-
+                  "$(terraformBackendFile)"
+                  "$(downloadedPlanPath)"
+                workingDirectory: $(selfRepoRoot)/terraform
+                addSpnToEnvironment: true
+              env:
+                SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+                APP_SERVICE_CUSTOM_HOSTNAME: $(app_service_custom_hostname)
+                APP_SERVICE_CUSTOM_HOSTNAME_SSL_STATE: $(app_service_custom_hostname_ssl_state)
+
+            - template: /templates/shared-runner-hygiene.yml
+              parameters:
+                runInitialization: false
+                runPreJobCleanup: false
+                runCachePrep: false
